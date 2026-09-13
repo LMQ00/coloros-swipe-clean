@@ -1,0 +1,2 @@
+# libxposed 现代 API 模块入口声明（每行一个全限定类名）。
+io.github.lmq00.swipeclean.hook.ModuleMain

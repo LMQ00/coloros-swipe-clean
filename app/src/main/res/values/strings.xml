@@ -1,0 +1,10 @@
+<resources>
+    <string name="app_name">划卡控制</string>
+    <string name="header_title">划卡控制白名单</string>
+    <string name="header_hint">选择应用在「最近任务划卡」时的行为。默认 = 跟随系统。</string>
+    <string name="mode_default">默认</string>
+    <string name="mode_keep">划卡不杀</string>
+    <string name="mode_kill">划卡必杀</string>
+    <string name="search_hint">搜索应用名或包名</string>
+    <string name="show_system">显示系统应用</string>
+</resources>

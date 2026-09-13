@@ -1,0 +1,12 @@
+# Android / Gradle
+.gradle/
+build/
+local.properties
+*.iml
+.idea/
+captures/
+.externalNativeBuild/
+.cxx/
+
+# 逆向素材：原始 APK 不入库
+*.apk
