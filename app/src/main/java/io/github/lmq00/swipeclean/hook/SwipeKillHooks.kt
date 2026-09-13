@@ -47,6 +47,9 @@ internal object SwipeKillHooks {
     private var infoField: Field? = null
     private var nameField: Field? = null
 
+    /** 前若干次判定打日志，用来确认 Hook 是否真的被划卡路径调用。 */
+    private var queries = 0
+
     fun install(module: XposedModule, classLoader: ClassLoader) {
         var hooked = 0
         for (className in TARGET_CLASSES) {
@@ -70,6 +73,10 @@ internal object SwipeKillHooks {
             .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
             .intercept { chain ->
                 val pkg = packageOf(chain.getArg(0))
+                if (queries < 5) {
+                    queries++
+                    module.log(Log.INFO, TAG, "filter query: $pkg")
+                }
                 when (if (pkg == null) Config.MODE_DEFAULT else ConfigBridge.modeOf(module, pkg)) {
                     Config.MODE_KEEP -> {
                         module.log(Log.INFO, TAG, "swipe-up keep: $pkg")

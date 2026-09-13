@@ -53,6 +53,10 @@ dependencies {
     // Provided by LSPosed at runtime; never bundled into the APK.
     compileOnly("io.github.libxposed:api:101.0.1")
 
+    // 模块 App ↔ 框架的配置通道：提供 XposedProvider / XposedServiceHelper，
+    // 其 manifest 会并入 XposedProvider（authority <applicationId>.XposedService）。
+    implementation("io.github.libxposed:service:101.0.0")
+
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("androidx.recyclerview:recyclerview:1.3.2")
