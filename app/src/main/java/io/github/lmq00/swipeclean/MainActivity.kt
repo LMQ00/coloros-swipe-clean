@@ -1,37 +1,33 @@
 package io.github.lmq00.swipeclean
 
 import android.os.Bundle
-import android.widget.CheckBox
+import android.view.View
 import android.widget.EditText
 import androidx.appcompat.app.AppCompatActivity
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import com.google.android.material.materialswitch.MaterialSwitch
 import java.util.concurrent.Executors
 
 class MainActivity : AppCompatActivity() {
 
     private val worker = Executors.newSingleThreadExecutor()
     private lateinit var adapter: AppListAdapter
+    private lateinit var loading: View
+    private lateinit var empty: View
+
     private var all: List<AppEntry> = emptyList()
     private var query: String = ""
     private var showSystem: Boolean = false
+    private var loaded: Boolean = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
-        adapter = AppListAdapter(
-            modeLabel = { mode ->
-                when (mode) {
-                    Config.MODE_KEEP -> getString(R.string.mode_keep)
-                    Config.MODE_KILL -> getString(R.string.mode_kill)
-                    else -> getString(R.string.mode_default)
-                }
-            },
-            onModeChanged = { entry, mode ->
-                ConfigStore.setMode(this, entry.packageName, mode)
-            },
-        )
+        adapter = AppListAdapter { entry, mode ->
+            ConfigStore.setMode(this, entry.packageName, mode)
+        }
 
         findViewById<RecyclerView>(R.id.list).apply {
             layoutManager = LinearLayoutManager(this@MainActivity)
@@ -39,13 +35,19 @@ class MainActivity : AppCompatActivity() {
         }
 
         findViewById<EditText>(R.id.search).addTextChangedListener(
-            onText = { query = it },
+            onText = {
+                query = it
+                render()
+            },
         )
 
-        findViewById<CheckBox>(R.id.show_system).setOnCheckedChangeListener { _, checked ->
+        findViewById<MaterialSwitch>(R.id.show_system).setOnCheckedChangeListener { _, checked ->
             showSystem = checked
             render()
         }
+
+        loading = findViewById(R.id.loading)
+        empty = findViewById(R.id.empty)
 
         load()
     }
@@ -60,17 +62,16 @@ class MainActivity : AppCompatActivity() {
             val apps = AppRepository.load(this)
             runOnUiThread {
                 all = apps
+                loaded = true
+                loading.visibility = View.GONE
                 render()
             }
         }
     }
 
     private fun render() {
-        val prefs = ConfigStore.prefs(this)
-        val modes = HashMap<String, Int>(all.size)
-        for (entry in all) {
-            modes[entry.packageName] = ConfigStore.modeOf(prefs, entry.packageName)
-        }
+        if (!loaded) return
+        val modes = ConfigStore.modeMap(ConfigStore.prefs(this))
         val visible = all.filter { entry ->
             (showSystem || !entry.system) &&
                 (query.isBlank() ||
@@ -78,6 +79,7 @@ class MainActivity : AppCompatActivity() {
                     entry.packageName.contains(query, ignoreCase = true))
         }
         adapter.submit(visible, modes)
+        empty.visibility = if (visible.isEmpty()) View.VISIBLE else View.GONE
     }
 }
 

@@ -36,10 +36,14 @@ object ConfigStore {
     fun prefs(context: Context): SharedPreferences =
         context.getSharedPreferences(Config.GROUP, Context.MODE_PRIVATE)
 
-    fun modeOf(prefs: SharedPreferences, pkg: String): Int = when {
-        prefs.getStringSet(Config.KEY_KEEP, emptySet())?.contains(pkg) == true -> Config.MODE_KEEP
-        prefs.getStringSet(Config.KEY_KILL, emptySet())?.contains(pkg) == true -> Config.MODE_KILL
-        else -> Config.MODE_DEFAULT
+    /** 列表渲染用：一次取出全部名单，避免每个应用各读一遍 SharedPreferences。 */
+    fun modeMap(prefs: SharedPreferences): Map<String, Int> {
+        val keep = prefs.getStringSet(Config.KEY_KEEP, emptySet()).orEmpty()
+        val kill = prefs.getStringSet(Config.KEY_KILL, emptySet()).orEmpty()
+        val modes = HashMap<String, Int>(keep.size + kill.size)
+        for (pkg in keep) modes[pkg] = Config.MODE_KEEP
+        for (pkg in kill) modes[pkg] = Config.MODE_KILL
+        return modes
     }
 
     /**
