@@ -15,12 +15,20 @@ android {
         versionName = "1.0.0"
     }
 
+    signingConfigs {
+        create("release") {
+            storeFile = rootProject.file("keystore/swipeclean.jks")
+            storePassword = "swipeclean"
+            keyAlias = "swipeclean"
+            keyPassword = "swipeclean"
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
-            // Release APK is signed with the auto-generated debug key so the
-            // artifact produced by CI is directly installable on device.
-            signingConfig = signingConfigs.getByName("debug")
+            // 固定 keystore：CI 每次构建产出的 APK 签名一致，可直接覆盖安装。
+            signingConfig = signingConfigs.getByName("release")
         }
     }
 

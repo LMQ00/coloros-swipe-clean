@@ -37,7 +37,8 @@ ActivityTaskSupervisor#killTaskProcessesIfPossible(Task)
 ./gradlew assembleRelease
 ```
 
-APK 产物：`app/build/outputs/apk/release/app-release.apk`（使用 debug 签名，便于直接安装）。
+APK 产物：`app/build/outputs/apk/release/app-release.apk`。
+签名使用仓库内固定 keystore（`keystore/swipeclean.jks`），因此不同构建产出的 APK 可直接覆盖安装。
 
 CI：推送到 `main` 后由 GitHub Actions 编译，产物在 Actions 的 Artifacts 中下载。
 
