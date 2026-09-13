@@ -43,7 +43,7 @@ android {
 
 dependencies {
     // Provided by LSPosed at runtime; never bundled into the APK.
-    compileOnly("io.github.libxposed:api:102.0.0")
+    compileOnly("io.github.libxposed:api:101.0.1")
 
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.appcompat:appcompat:1.7.0")
