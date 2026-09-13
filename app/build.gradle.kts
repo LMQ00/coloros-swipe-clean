@@ -5,7 +5,8 @@ plugins {
 
 android {
     namespace = "io.github.lmq00.swipeclean"
-    compileSdk = 35
+    // libxposed 的 service/interface 制品要求 compileSdk 36（targetSdk 仍为 35）。
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "io.github.lmq00.swipeclean"
