@@ -1,5 +1,6 @@
 package io.github.lmq00.swipeclean.hook
 
+import android.content.Context
 import android.util.Log
 import io.github.libxposed.api.XposedModule
 import io.github.lmq00.swipeclean.Config
@@ -8,28 +9,40 @@ import java.lang.reflect.Method
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * athena 侧的划卡清理判定。
+ * athena 侧的划卡判定。
  *
- * 框架（`ActivityTaskSupervisor`）只是移除任务，真正 force-stop 进程的是 athena
+ * 框架（`ActivityTaskSupervisor`）只负责移除任务，真正 force-stop 进程的是 athena
  * 自己的清理动作：
  *
  * ```
  * com.oplus.recents --REQUEST_CLEAR_SPEC_APP(type=13)-->
  *   com.oplus.athena.systemservice.action.prockill.clear.d#G0(Bundle)
- *     -> ...clear.v (SwipeUpClearAction)
- *        -> D0(...) v.java:97-120
+ *     -> ...clear.v (SwipeUpClearAction)#e1(Bundle)
+ *          -> G0(String,...)   v.java:134-190
+ *               - Z0(): 正在通话 / J0(): 该包还有其它任务 -> 跳过
+ *               - 系统应用 -> I0()，普通应用 -> D0()
+ *          -> E0()             v.java:121  统一移除任务卡片（与杀不杀无关）
+ *        -> D0(...)            v.java:97-120   ← 本模块挂这里
  *             int stopType = FilterHelper.getInstance().getStopType(procDetailInfo, aVar);
- *             stopType == 2 -> com.oplus.athena.systemservice.utils.p.b(...)  // force-stop
- *             stopType == 0 -> 不做任何事
+ *             stopType == 2 -> utils.p.b(...) -> j1.h.g(...) -> 强制结束进程
  * ```
  *
- * `getStopTypeInner` 是 `getStopType`（2 参、3 参两个重载）的共同实现，因此只需挂这一处：
+ * 两处 Hook：
  *
- * - `0`：保留（各调用方语义一致：`l.java` / `i.java` / `b.java` 中 0 都走「保留」分支）
- * - `2`：强杀
+ * 1. `FilterHelper#getStopTypeInner` —— `getStopType`（2 参/3 参两个重载）的共同实现。
+ *    名单内返回 `0`（保留）。这一处同时覆盖内存清理、深度清理等其它调用方。
+ * 2. `...clear.v#D0` —— 划卡决策点本身（只有 `G0` 一个调用者）。
+ *    保留名单直接跳过；必杀名单由本模块**直接调用 athena 自己的 force-stop**
+ *    （`com.oplus.athena.systemservice.utils.p.b`）。
  *
- * athena 的系统服务跑在 `android:process="system"`，与 system_server 同进程，
- * 所以作用域 `system` 即可覆盖。
+ * 为什么必杀不能只靠 `getStopType` 返回 `2`：`D0` 里还有两道闸门
+ * （`t0()` 的保护名单、`aVar.e()`/`O0()` 的最近任务锁），实测微信会被拦掉，
+ * 且框架侧 `killProcessesForRemovedTask` 对「有 started service / 有 receiver /
+ * 非后台态」的进程只 `setWaitingToKill` 而不立即杀。直接调用 athena 自己的
+ * force-stop 才和系统「清理」语义一致。
+ *
+ * 跳过 `D0` 不会影响卡片移除：任务 id 在 `G0` 里就已登记进 `f1446s`，
+ * 由 `e1` 末尾的 `E0()` 统一移除。
  */
 internal object AthenaHooks {
 
@@ -41,6 +54,16 @@ internal object AthenaHooks {
 
     private const val METHOD_NAME = "getStopTypeInner"
 
+    /** 划卡动作类（`v` 是该 APK 的混淆名，日志里其 TAG 为 `SwipeUpClearAction`）。 */
+    private const val SWIPE_CLASS = "com.oplus.athena.systemservice.action.prockill.clear.v"
+
+    private const val SWIPE_METHOD = "D0"
+
+    private const val PROC_DETAIL_INFO = "com.oplus.app.athena.ProcDetailInfo"
+
+    /** athena 自己的 force-stop 封装。 */
+    private const val FORCE_STOP_HELPER = "com.oplus.athena.systemservice.utils.p"
+
     /** `getStopType` 返回值：保留进程。 */
     private const val STOP_KEEP = 0
 
@@ -50,6 +73,9 @@ internal object AthenaHooks {
     private val installed = AtomicBoolean(false)
 
     private var pkgField: Field? = null
+    private var userField: Field? = null
+    private var forceStopMethod: Method? = null
+    private var systemContext: Any? = null
 
     /**
      * 兜底：`onPackageLoaded` 未按预期回调时，直接从 `ActivityThread#mPackages` 取
@@ -92,14 +118,18 @@ internal object AthenaHooks {
         var hooked = 0
         for (method in clazz.declaredMethods) {
             if (method.name == METHOD_NAME && method.parameterCount == 2) {
-                hook(module, method)
+                hookStopType(module, method)
                 hooked++
             }
         }
         module.log(Log.INFO, TAG, "athena hooks installed: $hooked")
+
+        resolveForceStop(classLoader)
+        installSwipeHook(module, classLoader)
     }
 
-    private fun hook(module: XposedModule, method: Method) {
+    /** `getStopTypeInner`：名单内返回 0（保留），其余交回系统。 */
+    private fun hookStopType(module: XposedModule, method: Method) {
         module.hook(method).intercept { chain ->
             val pkg = packageOf(chain.getArg(0))
             when (if (pkg == null) Config.MODE_DEFAULT else ConfigBridge.modeOf(module, pkg)) {
@@ -116,6 +146,76 @@ internal object AthenaHooks {
         }
     }
 
+    /** `SwipeUpClearAction#D0`：划卡决策点。 */
+    private fun installSwipeHook(module: XposedModule, classLoader: ClassLoader) {
+        val clazz = runCatching { Class.forName(SWIPE_CLASS, false, classLoader) }.getOrNull()
+        if (clazz == null) {
+            module.log(Log.WARN, TAG, "swipe class not found: $SWIPE_CLASS")
+            return
+        }
+        var hooked = 0
+        for (method in clazz.declaredMethods) {
+            if (method.name == SWIPE_METHOD &&
+                method.parameterCount == 5 &&
+                method.parameterTypes.last().name == PROC_DETAIL_INFO
+            ) {
+                module.hook(method).intercept { chain ->
+                    val info = chain.getArg(4)
+                    val pkg = packageOf(info)
+                    when (if (pkg == null) Config.MODE_DEFAULT else ConfigBridge.modeOf(module, pkg)) {
+                        Config.MODE_KEEP -> {
+                            module.log(Log.INFO, TAG, "athena swipe keep: $pkg")
+                            null
+                        }
+                        Config.MODE_KILL -> {
+                            module.log(Log.INFO, TAG, "athena swipe force kill: $pkg")
+                            forceStopAsync(pkg, userOf(info))
+                            null
+                        }
+                        else -> chain.proceed()
+                    }
+                }
+                hooked++
+            }
+        }
+        module.log(Log.INFO, TAG, "athena swipe hooks installed: $hooked")
+    }
+
+    private fun resolveForceStop(classLoader: ClassLoader) {
+        forceStopMethod = runCatching {
+            Class.forName(FORCE_STOP_HELPER, false, classLoader).getMethod(
+                "b",
+                Context::class.java,
+                String::class.java,
+                Int::class.javaPrimitiveType,
+                Int::class.javaPrimitiveType,
+                Int::class.javaPrimitiveType,
+                String::class.java,
+                String::class.java,
+            )
+        }.onFailure { Log.w(TAG, "athena force-stop helper not found", it) }.getOrNull()
+
+        systemContext = runCatching {
+            val activityThread = Class.forName("android.app.ActivityThread")
+            val current = activityThread.getMethod("currentActivityThread").invoke(null)
+            activityThread.getMethod("getSystemContext").invoke(current)
+        }.getOrNull()
+    }
+
+    /**
+     * 直接走 athena 自己的 force-stop（`utils.p.b` -> `j1.h.g` -> `OplusAthenaAmManager`
+     * 的 forceStopWithReason，失败再退回 `ActivityManager#forceStopPackageAsUser`）。
+     * 放到后台线程，避免在划卡流程里同步调用造成重入。
+     */
+    private fun forceStopAsync(pkg: String, userId: Int) {
+        val method = forceStopMethod ?: return
+        val context = systemContext ?: return
+        Thread {
+            runCatching { method.invoke(null, context, pkg, userId, 0, 0, null, "swipe clean") }
+                .onFailure { Log.w(TAG, "athena force-stop failed: $pkg", it) }
+        }.apply { isDaemon = true }.start()
+    }
+
     /** `ProcDetailInfo#pkgName` 是 public 字段，无需 setAccessible。 */
     private fun packageOf(info: Any?): String? {
         if (info == null) return null
@@ -124,5 +224,14 @@ internal object AthenaHooks {
             .getOrNull() ?: return null
         pkgField = field
         return runCatching { field.get(info) as? String }.getOrNull()
+    }
+
+    /** `ProcDetailInfo#userId` 同样是 public 字段。 */
+    private fun userOf(info: Any?): Int {
+        if (info == null) return 0
+        val field = userField ?: runCatching { info.javaClass.getField("userId") }
+            .getOrNull() ?: return 0
+        userField = field
+        return runCatching { field.getInt(info) }.getOrDefault(0)
     }
 }
