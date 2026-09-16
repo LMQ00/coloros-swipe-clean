@@ -2,6 +2,7 @@ package io.github.lmq00.swipeclean
 
 import android.app.Application
 import android.util.Log
+import com.google.android.material.color.DynamicColors
 import io.github.libxposed.service.XposedService
 import io.github.libxposed.service.XposedServiceHelper
 
@@ -18,6 +19,8 @@ class SwipeCleanApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        // 跟随系统取色（Material You），与 KernelSU 等系统工具的观感一致。
+        DynamicColors.applyToActivitiesIfAvailable(this)
         XposedServiceHelper.registerListener(object : XposedServiceHelper.OnServiceListener {
             override fun onServiceBind(service: XposedService) {
                 Log.i(TAG, "xposed service bound: ${service.frameworkName} ${service.frameworkVersion}")
