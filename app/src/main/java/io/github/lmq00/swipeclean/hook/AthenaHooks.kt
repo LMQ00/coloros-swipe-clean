@@ -37,6 +37,8 @@ internal object AthenaHooks {
 
     private const val TARGET_CLASS = "com.oplus.athena.common.parser.athena.FilterHelper"
 
+    private const val ATHENA_PACKAGE = "com.oplus.athena"
+
     private const val METHOD_NAME = "getStopTypeInner"
 
     /** `getStopType` 返回值：保留进程。 */
@@ -48,6 +50,36 @@ internal object AthenaHooks {
     private val installed = AtomicBoolean(false)
 
     private var pkgField: Field? = null
+
+    /**
+     * 兜底：`onPackageLoaded` 未按预期回调时，直接从 `ActivityThread#mPackages` 取
+     * athena 的 `LoadedApk` ClassLoader 重试。system_server 内多包共存，这条路径稳定。
+     */
+    fun installWhenReady(module: XposedModule) {
+        Thread {
+            for (attempt in 1..30) {
+                if (installed.get()) return@Thread
+                val classLoader = athenaClassLoader()
+                if (classLoader != null) {
+                    install(module, classLoader)
+                    if (installed.get()) return@Thread
+                }
+                Thread.sleep(2_000L)
+            }
+            module.log(Log.WARN, TAG, "athena classloader unavailable after retries")
+        }.apply { isDaemon = true }.start()
+    }
+
+    private fun athenaClassLoader(): ClassLoader? = runCatching {
+        val activityThread = Class.forName("android.app.ActivityThread")
+        val current = activityThread.getMethod("currentActivityThread").invoke(null) ?: return null
+        val packages = activityThread.getDeclaredField("mPackages")
+            .apply { isAccessible = true }
+            .get(current) as? Map<*, *> ?: return null
+        val reference = packages[ATHENA_PACKAGE] as? java.lang.ref.WeakReference<*> ?: return null
+        val loadedApk = reference.get() ?: return null
+        loadedApk.javaClass.getMethod("getClassLoader").invoke(loadedApk) as? ClassLoader
+    }.getOrNull()
 
     fun install(module: XposedModule, classLoader: ClassLoader) {
         if (!installed.compareAndSet(false, true)) return

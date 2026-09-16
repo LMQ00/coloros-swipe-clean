@@ -23,8 +23,9 @@ class ModuleMain : XposedModule() {
 
     override fun onSystemServerStarting(param: XposedModuleInterface.SystemServerStartingParam) {
         SwipeKillHooks.install(this, param.classLoader)
-        // 若此时 athena 的类已可见就直接挂上；否则等 onPackageLoaded 再挂。
+        // 若此时 athena 的类已可见就直接挂上；否则等 onPackageLoaded 或兜底重试。
         AthenaHooks.install(this, param.classLoader)
+        AthenaHooks.installWhenReady(this)
     }
 
     /** athena 的类由它自己的 APK 提供，要等该包在 system_server 内加载后再挂。 */
