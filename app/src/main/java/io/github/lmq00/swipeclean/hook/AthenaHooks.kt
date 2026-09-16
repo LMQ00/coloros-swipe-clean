@@ -162,12 +162,13 @@ internal object AthenaHooks {
                 module.hook(method).intercept { chain ->
                     val info = chain.getArg(4)
                     val pkg = packageOf(info)
-                    when (if (pkg == null) Config.MODE_DEFAULT else ConfigBridge.modeOf(module, pkg)) {
-                        Config.MODE_KEEP -> {
+                    val mode = if (pkg == null) Config.MODE_DEFAULT else ConfigBridge.modeOf(module, pkg)
+                    when {
+                        mode == Config.MODE_KEEP -> {
                             module.log(Log.INFO, TAG, "athena swipe keep: $pkg")
                             null
                         }
-                        Config.MODE_KILL -> {
+                        mode == Config.MODE_KILL && pkg != null -> {
                             module.log(Log.INFO, TAG, "athena swipe force kill: $pkg")
                             forceStopAsync(pkg, userOf(info))
                             null
