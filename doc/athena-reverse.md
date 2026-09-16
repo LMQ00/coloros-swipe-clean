@@ -228,11 +228,18 @@ Hook 侧 `XposedInterface#getRemotePreferences(group)` 读的是**框架侧存�
    单字母）。本模块刻意不挂这些混淆类，只挂 `FilterHelper` 的稳定入口。
 3. **Hook 3 的作用域比「划卡」宽**：`getStopTypeInner` 也被内存清理、深度清理等调用方使用，
    因此名单内应用同时不会被 athena 的后台清理回收 —— 这与「保后台」的目标一致，但需知悉。
-4. **`WindowProcessController` 字段**：`mInfo` / `mName` 为包内可见字段，若被重命名则取不到包名，
+4. **系统应用走另一条分支**：`G0()` 把 `procDetailInfo.system == true` 的应用交给 `I0()`
+   （`v.java:171`），`I0` 不调用 `getStopType`，而是用自己的配置
+   （`swipe_up_kill_system_audio_enabled` / `swipe_up_kill_system_pip_enabled` /
+   `swipe_up_kill_system_visible_window_enabled` / `swipe_up_force_kill_system_process`）。
+   因此「划卡不杀」对系统应用不生效；模块 UI 默认不显示系统应用，与此一致。
+   （另注：`system_process_force_cast_list` / `no_system_process_force_cast_list` 可以改写
+   `system` 判定，属于系统自带白名单，模块不介入。）
+5. **`WindowProcessController` 字段**：`mInfo` / `mName` 为包内可见字段，若被重命名则取不到包名，
    该次调用按「默认」处理。
-5. **多任务场景**：`G0()` 中 `J0()`（该包还有其它任务）会跳过 kill；此时划掉一张卡不会杀进程，
+6. **多任务场景**：`G0()` 中 `J0()`（该包还有其它任务）会跳过 kill；此时划掉一张卡不会杀进程，
    属系统既有行为，不受本模块控制。
-6. **最近任务锁定**：用户手动锁定过的卡片由 `isRecentLockTask` 保护，本模块不覆盖该路径。
+7. **最近任务锁定**：用户手动锁定过的卡片由 `isRecentLockTask` 保护，本模块不覆盖该路径。
 
 ## 8. 实机验证记录
 
