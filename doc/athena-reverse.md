@@ -53,8 +53,12 @@
 | 系统服务进程 | `com.oplus.athena.systemservice.OplusAthenaSystemService`，`android:process="system"` | `AndroidManifest.xml:86-89` |
 
 `android:process="system"` 表示 athena 的系统服务与 system_server **同进程**，因此
-LSPosed 作用域只需 `system`（进程名），athena 的类由它自己的 APK 提供，
+LSPosed 作用域只需 `system`（进程名，不是包名 `android`），athena 的类由它自己的 APK 提供，
 需等 `onPackageLoaded("com.oplus.athena")` 拿到对应 ClassLoader 再挂。
+
+`module.prop` 里 `staticScope=false`：作用域交给用户在 LSPosed 里选，
+`scope.list` 的 `system` 只作为推荐项预勾选。若写成 `true`，LSPosed 会锁死作用域，
+界面里只能看到声明的那一项、无法增删（早期版本就是这个表现）。
 
 ## 3. 路径 B：athena 的划卡清理动作
 

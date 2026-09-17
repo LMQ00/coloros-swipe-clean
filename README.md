@@ -56,7 +56,8 @@ CI：推送到 `main` 后由 GitHub Actions 编译，产物在 Actions 的 Artif
 ## 安装
 
 1. 安装 APK。
-2. LSPosed 中启用模块，作用域勾选 **系统框架**（对应进程名 `system`，`scope.list` 已静态声明）。
+2. LSPosed 中启用模块。作用域会显示全部应用，其中 **系统框架** 由 `scope.list` 预勾选为推荐项。
+   本模块的 Hook 全在 system_server（进程名 `system`），勾选其它应用不会生效（也无害）。
 3. 重启设备。
 4. **打开一次 App**：配置通过 libxposed 服务通道写入框架侧，框架只在 App 进程启动时下发该通道。
    之后每次改动名单都会实时推送。

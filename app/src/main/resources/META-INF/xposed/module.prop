@@ -1,5 +1,7 @@
 minApiVersion=101
 targetApiVersion=101
-staticScope=true
+# false：作用域交给用户在 LSPosed 里选，scope.list 只作为「推荐」预勾选。
+# true 会锁死作用域，LSPosed 里只能看到声明的那一项、无法增删。
+staticScope=false
 autoHotReload=false
 exceptionMode=protective
