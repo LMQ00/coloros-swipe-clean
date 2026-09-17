@@ -18,18 +18,30 @@ android {
 
     signingConfigs {
         create("release") {
-            storeFile = rootProject.file("keystore/swipeclean.jks")
-            storePassword = "swipeclean"
-            keyAlias = "swipeclean"
-            keyPassword = "swipeclean"
+            // 签名密钥不入库：CI 从 GitHub Secrets 解码到 KEYSTORE_PATH 后注入。
+            System.getenv("KEYSTORE_PATH")?.let { path ->
+                val keyFile = file(path)
+                if (keyFile.exists()) {
+                    storeFile = keyFile
+                    storePassword = System.getenv("KEYSTORE_PASSWORD")
+                    keyAlias = System.getenv("KEY_ALIAS")
+                    keyPassword = System.getenv("KEY_PASSWORD")
+                }
+            }
         }
     }
 
     buildTypes {
         release {
             isMinifyEnabled = false
-            // 固定 keystore：CI 每次构建产出的 APK 签名一致，可直接覆盖安装。
-            signingConfig = signingConfigs.getByName("release")
+            // 有密钥就用固定签名（各次构建可互相覆盖安装）；没有则退回 debug 签名，
+            // 保证克隆仓库的人无需私钥也能构建出可安装的 APK。
+            val releaseSigning = signingConfigs.getByName("release")
+            signingConfig = if (releaseSigning.storeFile != null) {
+                releaseSigning
+            } else {
+                signingConfigs.getByName("debug")
+            }
         }
     }
 

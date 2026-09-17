@@ -38,7 +38,7 @@ ColorOS / realme UI 保后台研究 + LSPosed 模块。目标：让用户自由�
 | SDK | `compileSdk 36`、`targetSdk 35`、`minSdk 26` |
 | 框架 | libxposed 现代 API（`compileOnly io.github.libxposed:api:101.0.1` + `implementation io.github.libxposed:service:101.0.0`） |
 | UI | Material 3（`com.google.android.material:material:1.12.0`）+ DynamicColors |
-| 签名 | `keystore/swipeclean.jks`（alias / storepass / keypass 均为 `swipeclean`），签名固定 → 新构建可直接覆盖安装 |
+| 签名 | 密钥**不入库**，存于 GitHub Secrets（`KEYSTORE_B64` / `KEYSTORE_PASSWORD` / `KEY_ALIAS` / `KEY_PASSWORD`），CI 构建时解码到 `KEYSTORE_PATH` 注入；签名固定 → 新构建可直接覆盖安装。本地/无密钥时自动退回 debug 签名 |
 | CI | `.github/workflows/build.yml`，产物 artifact 名 `swipe-clean-release` |
 
 CI 触发条件：push 到 `main`，但 `**.md` 与 `doc/**` 的纯文档改动**不触发编译**

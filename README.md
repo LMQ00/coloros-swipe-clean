@@ -64,7 +64,9 @@ force-stop（`utils.p.b`），与系统清理走同一条路。
 ```
 
 APK 产物：`app/build/outputs/apk/release/app-release.apk`。
-签名使用仓库内固定 keystore（`keystore/swipeclean.jks`），因此不同构建产出的 APK 可直接覆盖安装。
+签名密钥不入库（存于 GitHub Secrets），CI 构建出的 APK 使用固定签名，因此可直接覆盖安装。
+克隆仓库自行构建时没有密钥，会自动退回 debug 签名，产出的 APK 同样可安装，
+但无法覆盖由官方 Release 安装的版本。
 
 CI：推送到 `main` 后由 GitHub Actions 编译，产物在 Actions 的 Artifacts（`swipe-clean-release`）中下载。
 
