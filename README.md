@@ -2,17 +2,23 @@
 
 ColorOS / realme UI 上自由控制「最近任务划卡能否杀死 App」的 LSPosed 模块。
 
-系统内置了一套白名单（`remove_task_filter_pkg` / `remove_task_filter_proc` 等），
-决定划掉卡片后进程是否被杀，普通用户无法修改。本模块在判定点上做运行时 Hook，
-提供 UI 让用户按 App 选择行为。
+系统内置了一套白名单（`remove_task_filter_pkg` / `remove_task_filter_proc` 等）决定划掉卡片后
+进程是否被杀，普通用户无法修改。本模块在判定点上做运行时 Hook，提供 UI 让用户按 App 选择行为。
 
 ## 行为
 
 | 选项 | 效果 |
 | --- | --- |
 | 默认 | 完全跟随系统原逻辑 |
-| 划卡不杀 | 划掉卡片后进程保留 |
+| 划卡不杀 | 划掉卡片后进程保留（卡片照常消失） |
 | 划卡必杀 | 划掉卡片后强制结束进程（即使持有前台服务） |
+
+## 使用
+
+- 顶部搜索框按应用名/包名过滤；右侧 **系统应用** 开关决定是否列出系统应用。
+- 点击任意一行弹出选择：默认 / 划卡不杀 / 划卡必杀。
+- 行尾显示当前设置：未设置（默认）为弱化色，已设置为主题色。
+- 改动即时生效，无需重启。
 
 ## 原理
 
@@ -40,19 +46,6 @@ force-stop（`utils.p.b`），与系统清理走同一条路。
 
 细节、返回值语义与出处见 [`doc/athena-reverse.md`](doc/athena-reverse.md)。
 
-## 构建
-
-本地需要 Android SDK（platform 36 / build-tools 36）与 JDK 17：
-
-```bash
-./gradlew assembleRelease
-```
-
-APK 产物：`app/build/outputs/apk/release/app-release.apk`。
-签名使用仓库内固定 keystore（`keystore/swipeclean.jks`），因此不同构建产出的 APK 可直接覆盖安装。
-
-CI：推送到 `main` 后由 GitHub Actions 编译，产物在 Actions 的 Artifacts 中下载。
-
 ## 安装
 
 1. 安装 APK。
@@ -61,10 +54,40 @@ CI：推送到 `main` 后由 GitHub Actions 编译，产物在 Actions 的 Artif
 3. 重启设备。
 4. **打开一次 App**：配置通过 libxposed 服务通道写入框架侧，框架只在 App 进程启动时下发该通道。
    之后每次改动名单都会实时推送。
-5. 为需要控制的应用选择行为，划卡测试。
+
+## 构建
+
+需要 Android SDK（platform 36 / build-tools 36）与 JDK 17：
+
+```bash
+./gradlew assembleRelease
+```
+
+APK 产物：`app/build/outputs/apk/release/app-release.apk`。
+签名使用仓库内固定 keystore（`keystore/swipeclean.jks`），因此不同构建产出的 APK 可直接覆盖安装。
+
+CI：推送到 `main` 后由 GitHub Actions 编译，产物在 Actions 的 Artifacts（`swipe-clean-release`）中下载。
 
 ## 兼容性
 
 - 目标：ColorOS 16（Android 16）/ Athena 6.0.1（`versionCode 601`，构建提交 `62c260e`）。
+  已在 realme UI 实机验证。
 - 其它 ColorOS 版本可能因框架类名或返回值语义变化而失效；失效时模块只记录日志，不改变系统行为。
+
+## 已知限制
+
+- **系统应用不受名单控制**：`G0()` 把 `procDetailInfo.system == true` 的应用交给另一分支 `I0()`，
+  该分支不经过 `getStopType`。UI 默认不显示系统应用，与此一致。
+- **最近任务里手动锁定过的卡片**由 `isRecentLockTask` 保护，本模块不覆盖。
 - 「划卡不杀」名单同时会让该应用不被 athena 的后台内存清理回收（两者共用同一判定入口）。
+
+## 排查
+
+模块没生效时按顺序检查：
+
+1. LSPosed 里模块是否启用、作用域里 **系统框架** 是否勾选（必须是进程名 `system`）。
+2. 日志：`/data/adb/lspd/log/modules_*.log` 里搜 `SwipeClean`，正常应有
+   `swipe hooks installed: 2` / `athena hooks installed: 1` / `athena swipe hooks installed: 1`。
+3. 若出现 `swipe-up keep:` / `athena swipe keep:` 但进程仍死，属未覆盖的路径，请附日志反馈。
+
+开发与接手说明见 [`AGENTS.md`](AGENTS.md)。

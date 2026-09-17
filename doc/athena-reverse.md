@@ -11,7 +11,7 @@
 > 复现命令：
 > ```bash
 > jadx -d ~/tmp/athena_new Athena_6.0.1_new.apk
-> unzip -p /system/framework/oplus-services.jar classes3.dex > /tmp/oplus.dex
+> unzip -p /system/framework/oplus-services.jar classes3.dex > ~/tmp/oplus.dex
 > ```
 
 ## 1. 结论
