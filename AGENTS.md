@@ -41,6 +41,9 @@ ColorOS / realme UI 保后台研究 + LSPosed 模块。目标：让用户自由�
 | 签名 | `keystore/swipeclean.jks`（alias / storepass / keypass 均为 `swipeclean`），签名固定 → 新构建可直接覆盖安装 |
 | CI | `.github/workflows/build.yml`，产物 artifact 名 `swipe-clean-release` |
 
+CI 触发条件：push 到 `main`，但 `**.md` 与 `doc/**` 的纯文档改动**不触发编译**
+（需要时用 `workflow_dispatch` 手动跑）。
+
 `compileSdk 36` 是硬要求：libxposed 的 `service` / `interface` 制品声明 `minCompileSdk=36`。
 Kotlin 必须 ≥ 2.2，否则在该 classpath 下会触发 FIR 内部崩溃（`FirIncompatibleClassTypeChecker`）。
 
