@@ -3,10 +3,15 @@ package io.github.lmq00.swipeclean
 import android.os.Bundle
 import android.view.View
 import android.widget.EditText
+import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
+import androidx.recyclerview.widget.DividerItemDecoration
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import com.google.android.material.bottomsheet.BottomSheetDialog
 import com.google.android.material.materialswitch.MaterialSwitch
+import com.google.android.material.radiobutton.MaterialRadioButton
 import java.util.concurrent.Executors
 
 class MainActivity : AppCompatActivity() {
@@ -25,13 +30,20 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
-        adapter = AppListAdapter { entry, mode ->
-            ConfigStore.setMode(this, entry.packageName, mode)
-        }
+        adapter = AppListAdapter(
+            modeLabel = { mode -> getString(modeLabelRes(mode)) },
+            onModePick = { entry, mode -> showModePicker(entry, mode) },
+        )
 
         findViewById<RecyclerView>(R.id.list).apply {
             layoutManager = LinearLayoutManager(this@MainActivity)
             adapter = this@MainActivity.adapter
+            ContextCompat.getDrawable(this@MainActivity, R.drawable.divider)?.let { divider ->
+                addItemDecoration(
+                    DividerItemDecoration(this@MainActivity, DividerItemDecoration.VERTICAL)
+                        .apply { setDrawable(divider) },
+                )
+            }
         }
 
         findViewById<EditText>(R.id.search).addTextChangedListener(
@@ -80,6 +92,35 @@ class MainActivity : AppCompatActivity() {
         }
         adapter.submit(visible, modes)
         empty.visibility = if (visible.isEmpty()) View.VISIBLE else View.GONE
+    }
+
+    private fun showModePicker(entry: AppEntry, current: Int) {
+        val sheet = layoutInflater.inflate(R.layout.sheet_mode, null)
+        val dialog = BottomSheetDialog(this)
+        dialog.setContentView(sheet)
+        sheet.findViewById<TextView>(R.id.sheet_title).text = entry.label
+
+        val options = listOf(
+            R.id.opt_default to Config.MODE_DEFAULT,
+            R.id.opt_keep to Config.MODE_KEEP,
+            R.id.opt_kill to Config.MODE_KILL,
+        )
+        for ((id, mode) in options) {
+            val option = sheet.findViewById<MaterialRadioButton>(id)
+            option.isChecked = mode == current
+            option.setOnClickListener {
+                ConfigStore.setMode(this, entry.packageName, mode)
+                render()
+                dialog.dismiss()
+            }
+        }
+        dialog.show()
+    }
+
+    private fun modeLabelRes(mode: Int): Int = when (mode) {
+        Config.MODE_KEEP -> R.string.mode_keep
+        Config.MODE_KILL -> R.string.mode_kill
+        else -> R.string.mode_default
     }
 }
 

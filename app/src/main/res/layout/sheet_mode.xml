@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:paddingBottom="8dp">
+
+    <TextView
+        android:id="@+id/sheet_title"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:ellipsize="end"
+        android:maxLines="1"
+        android:paddingHorizontal="24dp"
+        android:paddingTop="20dp"
+        android:paddingBottom="8dp"
+        android:textAppearance="?attr/textAppearanceTitleMedium" />
+
+    <com.google.android.material.radiobutton.MaterialRadioButton
+        android:id="@+id/opt_default"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:minHeight="56dp"
+        android:paddingHorizontal="24dp"
+        android:text="@string/option_default"
+        android:textAppearance="?attr/textAppearanceBodyLarge" />
+
+    <com.google.android.material.radiobutton.MaterialRadioButton
+        android:id="@+id/opt_keep"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:minHeight="56dp"
+        android:paddingHorizontal="24dp"
+        android:text="@string/option_keep"
+        android:textAppearance="?attr/textAppearanceBodyLarge" />
+
+    <com.google.android.material.radiobutton.MaterialRadioButton
+        android:id="@+id/opt_kill"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:minHeight="56dp"
+        android:paddingHorizontal="24dp"
+        android:text="@string/option_kill"
+        android:textAppearance="?attr/textAppearanceBodyLarge" />
+
+</LinearLayout>

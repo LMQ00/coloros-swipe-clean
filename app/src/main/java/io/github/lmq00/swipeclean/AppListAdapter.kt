@@ -7,11 +7,11 @@ import android.view.ViewGroup
 import android.widget.ImageView
 import android.widget.TextView
 import androidx.recyclerview.widget.RecyclerView
-import com.google.android.material.button.MaterialButton
-import com.google.android.material.button.MaterialButtonToggleGroup
+import com.google.android.material.chip.Chip
 
 class AppListAdapter(
-    private val onModeChanged: (AppEntry, Int) -> Unit,
+    private val modeLabel: (Int) -> String,
+    private val onModePick: (AppEntry, Int) -> Unit,
 ) : RecyclerView.Adapter<AppListAdapter.Holder>() {
 
     private var items: List<AppEntry> = emptyList()
@@ -39,19 +39,14 @@ class AppListAdapter(
         private val icon: ImageView = itemView.findViewById(R.id.icon)
         private val label: TextView = itemView.findViewById(R.id.label)
         private val pkg: TextView = itemView.findViewById(R.id.pkg)
-        private val group: MaterialButtonToggleGroup = itemView.findViewById(R.id.mode)
-
-        private val buttons: Map<Int, MaterialButton> = mapOf(
-            Config.MODE_DEFAULT to itemView.findViewById(R.id.mode_default),
-            Config.MODE_KEEP to itemView.findViewById(R.id.mode_keep),
-            Config.MODE_KILL to itemView.findViewById(R.id.mode_kill),
-        )
+        private val chip: Chip = itemView.findViewById(R.id.mode)
 
         private val placeholder = itemView.context.packageManager.defaultActivityIcon
 
         fun bind(entry: AppEntry, mode: Int) {
             label.text = entry.label
             pkg.text = entry.packageName
+            chip.text = modeLabel(mode)
 
             icon.tag = entry.packageName
             icon.setImageDrawable(placeholder)
@@ -60,14 +55,7 @@ class AppListAdapter(
                 if (icon.tag == entry.packageName) icon.setImageDrawable(drawable)
             }
 
-            group.clearOnButtonCheckedListeners()
-            buttons[mode]?.let { group.check(it.id) }
-            group.addOnButtonCheckedListener { _, checkedId, isChecked ->
-                if (!isChecked) return@addOnButtonCheckedListener
-                val selected = buttons.entries.firstOrNull { it.value.id == checkedId }?.key
-                    ?: return@addOnButtonCheckedListener
-                onModeChanged(entry, selected)
-            }
+            itemView.setOnClickListener { onModePick(entry, mode) }
         }
     }
 }
