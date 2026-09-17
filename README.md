@@ -23,7 +23,8 @@ ColorOS / realme UI 上自由控制「最近任务划卡能否杀死 App」的 L
   -> ActivityTaskSupervisorExtImpl#getRemoveTaskFilterType(WindowProcessController)
     -> OplusAthenaManager#getRemoveTaskFilterType(WindowProcessController)
 
-路径 B（athena）：SwipeUpClearAction -> FilterHelper#getStopTypeInner
+路径 B（athena）：SwipeUpClearAction#e1 -> G0 -> D0（划卡决策点）
+  -> FilterHelper#getStopTypeInner
   -> stopType == 2 时 utils.p.b(...) 强制结束进程
 ```
 
@@ -32,7 +33,10 @@ ColorOS / realme UI 上自由控制「最近任务划卡能否杀死 App」的 L
 | A `getRemoveTaskFilterType` | `1` / `2` | `3` |
 | B `FilterHelper#getStopTypeInner` | `0` | `2` |
 
-只挂路径 A 时实机仍会被杀 —— 真正 force-stop 的是 athena 自己的清理动作。
+实测只改返回值不够：框架侧 `killProcessesForRemovedTask` 对「有 started service / 有 receiver /
+非后台态」的进程只 `setWaitingToKill` 不立即杀，athena 侧 `D0` 内还有保护名单闸门，
+微信这类常驻应用两条都会被放行。因此模块额外挂 `D0` 本身：必杀时直接调用 athena 自己的
+force-stop（`utils.p.b`），与系统清理走同一条路。
 
 细节、返回值语义与出处见 [`doc/athena-reverse.md`](doc/athena-reverse.md)。
 

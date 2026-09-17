@@ -25,8 +25,10 @@
 
 路径 B（athena）：com.oplus.recents --REQUEST_CLEAR_SPEC_APP(13)-->
   com.oplus.athena.systemservice.action.prockill.clear.v (SwipeUpClearAction)
-    -> FilterHelper#getStopType -> FilterHelper#getStopTypeInner
-       -> stopType == 2 时 com.oplus.athena.systemservice.utils.p.b(...) -> j1.h.g(...) 强制结束进程
+    -> e1(Bundle) -> G0(String,...) -> D0(...)      ← 划卡决策点（v.java:97）
+         int stopType = FilterHelper.getInstance().getStopType(procDetailInfo, aVar);
+         stopType == 2 -> com.oplus.athena.systemservice.utils.p.b(...) -> 强制结束进程
+    -> E0()                                         ← 统一移除任务卡片（与杀不杀无关）
 ```
 
 实机验证过：**只挂路径 A 时，`getRemoveTaskFilterType` 已返回「不杀」，进程仍被 athena 杀掉**。
@@ -184,19 +186,59 @@ if (filterType != 2) {
 
 ## 5. 本模块的 Hook 点
 
-| # | 类 | 方法 | 名单命中时返回 |
+| # | 类 | 方法 | 名单命中时的行为 |
 | --- | --- | --- | --- |
-| 1 | `com.android.server.wm.OplusAthenaManager` | `getRemoveTaskFilterType(WindowProcessController)` | `1` / `3` |
-| 2 | `com.android.server.wm.ActivityTaskSupervisorExtImpl` | 同上 | `1` / `3` |
-| 3 | `com.oplus.athena.common.parser.athena.FilterHelper` | `getStopTypeInner(ProcDetailInfo, r0.a)` | `0` / `2` |
+| 1 | `com.android.server.wm.OplusAthenaManager` | `getRemoveTaskFilterType(WindowProcessController)` | 返回 `1`（不杀）/ `3`（强杀） |
+| 2 | `com.android.server.wm.ActivityTaskSupervisorExtImpl` | 同上 | 同上 |
+| 3 | `com.oplus.athena.common.parser.athena.FilterHelper` | `getStopTypeInner(ProcDetailInfo, r0.a)` | 返回 `0`（保留）/ `2`（强杀） |
+| 4 | `com.oplus.athena.systemservice.action.prockill.clear.v` | `D0(t, h, r0.a, ClearRecord, ProcDetailInfo)` | 不杀：跳过；必杀：调用 athena 自己的 force-stop 后跳过 |
 
 未命中时 `chain.proceed()` 交回系统原逻辑。包名来源：
 
 - Hook 1/2：`WindowProcessController#mInfo`（`ApplicationInfo.packageName`，包内可见，需 `setAccessible`），
   回退 `mName` 的 `:` 前缀。
-- Hook 3：`ProcDetailInfo#pkgName`（`public String`，`com.oplus.app.athena.ProcDetailInfo:36`）。
+- Hook 3/4：`ProcDetailInfo#pkgName`（`public String`，`com.oplus.app.athena.ProcDetailInfo:36`）。
 
 Hook 3 挂在 `getStopTypeInner` 而非 `getStopType`，是因为两个重载都收敛到它，一处即可覆盖。
+
+### 5.1 为什么必杀还需要 Hook 4
+
+实测：Hook 1/2 返回 `3`、Hook 3 返回 `2` 之后，**带常驻服务的应用（微信）依然不会被杀**。
+两处闸门：
+
+- 框架侧 `ActivityManagerService#killProcessesForRemovedTask`：
+
+  ```java
+  if (wpc.hasRecentTasks()) { log "skip ... because hasRecentTasks"; }
+  else {
+      ProcessRecord pr = wpc.mOwner;
+      if (ActivityManager.isProcStateBackground(pr.mState.getSetProcState())
+              && pr.mReceivers.numberOfCurReceivers() == 0
+              && !pr.mState.hasStartedServices()) {
+          pr.killLocked("remove task", 10, 22, true);
+      } else {
+          pr.setWaitingToKill("remove task");   // 只标记，等它自己变后台
+      }
+  }
+  ```
+
+- athena 侧 `D0` 自身：`stopType == 2` 之后还有
+  `!t0(tVar, hVar, proc, false)`（`b.t0` -> `h.x` 的名单 + `t.d`）与
+  `aVar.e(pkg) || !O0(proc)`（`e` = `FilterHelper.getBlackList().contains`，`O0` = 最近任务锁）。
+
+因此 Hook 4 直接落在划卡决策点上，必杀时调用 athena 自己的 force-stop：
+
+```java
+com.oplus.athena.systemservice.utils.p.b(ctx, pkg, userId, reason, type, a, b)
+  -> p.c(...) -> j1.h.g(pkg, userId, 13, type + 2000, ...)   // 与系统清理同一条路
+  -> i.t().g(...) -> OplusAthenaAmManager#forceStopWithReason（失败退回 forceStopPackageAsUser）
+```
+
+放在后台线程调用，避免在划卡流程里同步重入。
+
+**跳过 `D0` 不会影响卡片移除**：任务 id 在 `G0` 里（`v.java:501`）就已登记进 `f1446s`，
+由 `e1` 末尾的 `E0()`（`v.java:121-125` -> `F0` -> `utils.p.j` -> `z0.l.n` = `removeTask`）统一移除。
+实测确认卡片照常消失、进程存活。
 
 ## 6. 模块 ↔ 框架的配置通道
 
@@ -224,8 +266,12 @@ Hook 侧 `XposedInterface#getRemotePreferences(group)` 读的是**框架侧存�
 1. **ColorOS 版本差异**：`OplusAthenaManager` / `ActivityTaskSupervisorExtImpl` /
    `FilterHelper#getStopTypeInner` 均为私有实现，跨大版本可能改名或改变返回值语义。
    Hook 失败时模块只打日志、不改变系统行为。
-2. **`FilterHelper` 的类名稳定，但划卡动作类 `...prockill.clear.v` 是混淆名**（`v`/`d`/`b` 等
-   单字母）。本模块刻意不挂这些混淆类，只挂 `FilterHelper` 的稳定入口。
+2. **划卡动作类 `...prockill.clear.v` 是混淆名**（`v`/`d`/`b` 等单字母，同一 APK 内稳定，
+   跨 Athena 版本可能变化）。模块对它做了防御：类找不到时只打日志
+   （`swipe class not found: ...`），Hook 3 仍然生效 —— 此时「划卡不杀」正常，
+   「划卡必杀」退化为 athena 自己的判定（可能被 `D0` 内闸门拦掉）。
+   挂载时机同时用 `onPackageLoaded("com.oplus.athena")` 与
+   `ActivityThread#mPackages` 取 `LoadedApk` ClassLoader 的兜底重试（30 × 2s）。
 3. **Hook 3 的作用域比「划卡」宽**：`getStopTypeInner` 也被内存清理、深度清理等调用方使用，
    因此名单内应用同时不会被 athena 的后台清理回收 —— 这与「保后台」的目标一致，但需知悉。
 4. **系统应用走另一条分支**：`G0()` 把 `procDetailInfo.system == true` 的应用交给 `I0()`
@@ -258,6 +304,15 @@ Hook 侧 `XposedInterface#getRemotePreferences(group)` 读的是**框架侧存�
 - [x] 模块注入 system_server（作用域必须写进程名 `system`，写 `android` 不会注入）。
 - [x] 路径 A 的 Hook 命中并返回「不杀」。
 - [x] 配置通道打通（`module_configs` 表出现 `keep` / `kill` 两组数据）。
-- [ ] 路径 B 的 Hook 命中（`athena keep:` 日志）。
-- [ ] 名单内 App 划卡后进程存活。
-- [ ] 「必杀」（返回 `2` / `3`）对持有 foreground service 的 App 生效。
+- [x] 路径 B 的 Hook 命中（`athena hooks installed: 1`、`athena keep:`、`athena swipe keep:`）。
+- [x] 名单内 App 划卡后进程存活（`com.omarea.vtools`：卡片消失、进程保留）。
+- [x] 必杀对带常驻服务的 App 生效（`com.tencent.mm`）：
+
+  ```
+  athena swipe force kill: com.tencent.mm     ← 00:55:03.129
+  /proc/<pid> 启动时间                         ← 00:55:06.539（新进程）
+  ```
+
+  即旧进程在划卡瞬间结束、3 秒后由系统重新拉起。
+
+未覆盖（见 §7）：系统应用分支 `I0()`、最近任务锁定的卡片。
