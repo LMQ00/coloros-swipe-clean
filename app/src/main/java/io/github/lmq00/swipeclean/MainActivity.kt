@@ -10,7 +10,7 @@ import androidx.recyclerview.widget.DividerItemDecoration
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.bottomsheet.BottomSheetDialog
-import com.google.android.material.materialswitch.MaterialSwitch
+import com.google.android.material.chip.Chip
 import com.google.android.material.radiobutton.MaterialRadioButton
 import java.util.concurrent.Executors
 
@@ -38,7 +38,7 @@ class MainActivity : AppCompatActivity() {
         findViewById<RecyclerView>(R.id.list).apply {
             layoutManager = LinearLayoutManager(this@MainActivity)
             adapter = this@MainActivity.adapter
-            ContextCompat.getDrawable(this@MainActivity, R.drawable.divider)?.let { divider ->
+            ContextCompat.getDrawable(this@MainActivity, R.drawable.divider_inset)?.let { divider ->
                 addItemDecoration(
                     DividerItemDecoration(this@MainActivity, DividerItemDecoration.VERTICAL)
                         .apply { setDrawable(divider) },
@@ -53,7 +53,7 @@ class MainActivity : AppCompatActivity() {
             },
         )
 
-        findViewById<MaterialSwitch>(R.id.show_system).setOnCheckedChangeListener { _, checked ->
+        findViewById<Chip>(R.id.show_system).setOnCheckedChangeListener { _, checked ->
             showSystem = checked
             render()
         }

@@ -7,7 +7,7 @@ import android.view.ViewGroup
 import android.widget.ImageView
 import android.widget.TextView
 import androidx.recyclerview.widget.RecyclerView
-import com.google.android.material.chip.Chip
+import com.google.android.material.color.MaterialColors
 
 class AppListAdapter(
     private val modeLabel: (Int) -> String,
@@ -39,14 +39,25 @@ class AppListAdapter(
         private val icon: ImageView = itemView.findViewById(R.id.icon)
         private val label: TextView = itemView.findViewById(R.id.label)
         private val pkg: TextView = itemView.findViewById(R.id.pkg)
-        private val chip: Chip = itemView.findViewById(R.id.mode)
+        private val mode: TextView = itemView.findViewById(R.id.mode)
 
         private val placeholder = itemView.context.packageManager.defaultActivityIcon
 
-        fun bind(entry: AppEntry, mode: Int) {
+        fun bind(entry: AppEntry, current: Int) {
             label.text = entry.label
             pkg.text = entry.packageName
-            chip.text = modeLabel(mode)
+            mode.text = modeLabel(current)
+            // 已设置过的应用用主色标出，未设置的保持弱化。
+            mode.setTextColor(
+                MaterialColors.getColor(
+                    itemView,
+                    if (current == Config.MODE_DEFAULT) {
+                        com.google.android.material.R.attr.colorOnSurfaceVariant
+                    } else {
+                        com.google.android.material.R.attr.colorPrimary
+                    },
+                ),
+            )
 
             icon.tag = entry.packageName
             icon.setImageDrawable(placeholder)
@@ -55,7 +66,7 @@ class AppListAdapter(
                 if (icon.tag == entry.packageName) icon.setImageDrawable(drawable)
             }
 
-            itemView.setOnClickListener { onModePick(entry, mode) }
+            itemView.setOnClickListener { onModePick(entry, current) }
         }
     }
 }

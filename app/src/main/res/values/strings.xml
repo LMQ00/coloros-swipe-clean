@@ -1,15 +1,13 @@
 <resources>
     <string name="app_name">划卡控制</string>
     <string name="header_title">划卡控制</string>
-    <string name="header_hint">设置应用被「最近任务划卡」时的行为，默认跟随系统。</string>
     <string name="mode_default">默认</string>
     <string name="mode_keep">划卡不杀</string>
     <string name="mode_kill">划卡必杀</string>
     <string name="option_default">默认（跟随系统）</string>
     <string name="option_keep">划卡不杀（保留进程）</string>
     <string name="option_kill">划卡必杀（强制结束进程）</string>
-    <string name="search_hint">搜索应用名或包名</string>
-    <string name="show_system">显示系统应用</string>
-    <string name="loading">正在读取应用列表…</string>
+    <string name="search_hint">搜索应用</string>
+    <string name="filter_system">系统应用</string>
     <string name="empty">没有匹配的应用</string>
 </resources>
