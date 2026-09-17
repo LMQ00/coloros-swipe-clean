@@ -3,6 +3,10 @@ name: Build APK
 on:
   push:
     branches: [main]
+    # 纯文档改动不产出任何 APK 差异，不触发编译。
+    paths-ignore:
+      - "**.md"
+      - "doc/**"
   workflow_dispatch:
 
 permissions:
