@@ -71,18 +71,27 @@ object ConfigStore {
     }
 
     /**
-     * 写入某个应用的划卡行为：本地与框架侧各写一份。
+     * 写入某个应用的划卡行为。
+     */
+    fun setMode(context: Context, pkg: String, mode: Int) = setModes(context, listOf(pkg), mode)
+
+    /**
+     * 批量写入多个应用的划卡行为：本地与框架侧各写一次，
+     * 批量操作只产生一次落盘与一次推送，不随应用数量放大。
      * SharedPreferences 的 StringSet 返回值不可直接修改，因此这里先复制再提交。
      */
-    fun setMode(context: Context, pkg: String, mode: Int) {
+    fun setModes(context: Context, pkgs: Collection<String>, mode: Int) {
+        if (pkgs.isEmpty()) return
         val prefs = prefs(context)
         val keep = (prefs.getStringSet(Config.KEY_KEEP, emptySet()) ?: emptySet()).toMutableSet()
         val kill = (prefs.getStringSet(Config.KEY_KILL, emptySet()) ?: emptySet()).toMutableSet()
-        keep.remove(pkg)
-        kill.remove(pkg)
-        when (mode) {
-            Config.MODE_KEEP -> keep.add(pkg)
-            Config.MODE_KILL -> kill.add(pkg)
+        for (pkg in pkgs) {
+            keep.remove(pkg)
+            kill.remove(pkg)
+            when (mode) {
+                Config.MODE_KEEP -> keep.add(pkg)
+                Config.MODE_KILL -> kill.add(pkg)
+            }
         }
         prefs.edit()
             .putStringSet(Config.KEY_KEEP, keep)

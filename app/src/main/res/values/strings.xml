@@ -10,4 +10,9 @@
     <string name="search_hint">搜索应用</string>
     <string name="filter_system">系统应用</string>
     <string name="empty">没有匹配的应用</string>
+    <string name="select_count">已选 %1$d 项</string>
+    <string name="select_all">全选</string>
+    <string name="select_none">取消全选</string>
+    <string name="select_exit">退出批量选择</string>
+    <string name="batch_applied">已把 %1$d 个应用设为「%2$s」</string>
 </resources>

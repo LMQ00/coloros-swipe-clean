@@ -2,7 +2,7 @@
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:background="?attr/selectableItemBackground"
+    android:foreground="?attr/selectableItemBackground"
     android:gravity="center_vertical"
     android:minHeight="64dp"
     android:orientation="horizontal"
@@ -48,10 +48,21 @@
         android:textAppearance="?attr/textAppearanceLabelLarge" />
 
     <ImageView
+        android:id="@+id/chevron"
         android:layout_width="18dp"
         android:layout_height="18dp"
         android:layout_marginStart="2dp"
         android:contentDescription="@null"
         android:src="@drawable/ic_chevron" />
+
+    <!-- 批量选择时替代箭头出现；不可点击，点击穿透到整行。 -->
+    <com.google.android.material.checkbox.MaterialCheckBox
+        android:id="@+id/check"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="4dp"
+        android:clickable="false"
+        android:focusable="false"
+        android:visibility="gone" />
 
 </LinearLayout>
