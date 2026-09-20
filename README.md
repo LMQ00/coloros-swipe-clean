@@ -17,6 +17,10 @@ ColorOS / realme UI 上自由控制「最近任务划卡能否杀死 App」的 L
 
 - 顶部搜索框按应用名/包名过滤；右侧 **系统应用** 开关决定是否列出系统应用。
 - 点击任意一行弹出选择：默认 / 划卡不杀 / 划卡必杀。
+- **长按任意一行进入批量选择**：标题栏变为「已选 N 项 / 全选」，行尾箭头换成勾选框，
+  底部出现 **默认 / 划卡不杀 / 划卡必杀** 三个批量按钮，一次应用到全部选中项。
+  选择模式下搜索与系统应用开关仍然可用，「全选」只作用于当前筛选结果——
+  因此可以「先搜索再全选」批量处理一批应用。按返回键或左上角 ✕ 退出。
 - 行尾显示当前设置：未设置（默认）为弱化色，已设置为主题色。
 - 改动即时生效，无需重启。
 
@@ -91,5 +95,9 @@ CI：推送到 `main` 后由 GitHub Actions 编译，产物在 Actions 的 Artif
 2. 日志：`/data/adb/lspd/log/modules_*.log` 里搜 `SwipeClean`，正常应有
    `swipe hooks installed: 2` / `athena hooks installed: 1` / `athena swipe hooks installed: 1`。
 3. 若出现 `swipe-up keep:` / `athena swipe keep:` 但进程仍死，属未覆盖的路径，请附日志反馈。
+4. **改了配置但不生效**（最常见）：配置要经 libxposed 服务通道写到框架侧，而该通道只在
+   模块 App 进程启动时由框架下发。**每次重装 APK 后通道都会失效，直到重启一次**，
+   表现为 UI 里改有反馈、实际行为不变。判定：`su -c 'logcat -d -s SwipeClean'` 里
+   没有 `xposed service bound:` 输出。重启后打开一次 App 即可自动把名单同步过去。
 
 开发与接手说明见 [`AGENTS.md`](AGENTS.md)。

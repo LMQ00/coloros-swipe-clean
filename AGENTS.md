@@ -92,6 +92,14 @@ doc/athena-reverse.md       逆向结论（接手先读这个）
   # 用 python sqlite3 打开（会自动合并 -wal），更新 modules.apk_path，再写回并删除 -wal/-shm
   ```
 
+  ⚠️ **同步 db 后必须重启**（`su -c 'setprop ctl.restart zygote'` 或重启设备）才会被 LSPosed 读到：
+  LSPosed 的模块列表是**开机时读进内存**的，不重启则模块 App 的 `XposedService` provider 不会被调用，
+  表现为**静默失效**——UI 里改配置有反馈、列表也更新，但 Hook 侧读到的仍是旧名单。
+
+  判定方法：`su -c 'logcat -d -s SwipeClean'` 若无 `xposed service bound: ...` 输出，即通道断了。
+  此时 App 本地 SharedPreferences 与框架侧 `module_configs` 会不一致（前者是新值、后者是旧值）；
+  重启后 App 首次启动会把本地名单整份推过去，自动收敛。
+
 - **改 Hook 后必须重启**：`su -c 'setprop ctl.restart zygote'` 软重启（约 1 分钟）即可让新代码注入
   system_server；只改 UI 不需要重启。
 - **日志位置**：
