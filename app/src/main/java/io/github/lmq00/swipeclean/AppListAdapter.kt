@@ -45,9 +45,9 @@ class AppListAdapter(
         val entry = items[position]
         holder.bind(
             entry = entry,
-            current = modes[entry.packageName] ?: Config.MODE_DEFAULT,
+            current = modes[entry.key] ?: Config.MODE_DEFAULT,
             selecting = selecting,
-            checked = entry.packageName in selected,
+            checked = entry.key in selected,
         )
     }
 
@@ -62,9 +62,23 @@ class AppListAdapter(
 
         private val placeholder = itemView.context.packageManager.defaultActivityIcon
 
+        /** 分身子项的缩进：捕获原始 padding 后按 user 逐级缩进（不修改布局文件）。 */
+        private val basePaddingStart = itemView.paddingStart
+        private val indentPx = (itemView.resources.displayMetrics.density * 32).toInt()
+
         fun bind(entry: AppEntry, current: Int, selecting: Boolean, checked: Boolean) {
             label.text = entry.label
-            pkg.text = entry.packageName
+            pkg.text = if (entry.userId == 0) {
+                entry.packageName
+            } else {
+                itemView.context.getString(R.string.dual_suffix, entry.packageName, entry.userId)
+            }
+            itemView.setPaddingRelative(
+                basePaddingStart + if (entry.userId == 0) 0 else indentPx,
+                itemView.paddingTop,
+                itemView.paddingEnd,
+                itemView.paddingBottom,
+            )
             mode.text = modeLabel(current)
             // 已设置过的应用用主色标出，未设置的保持弱化。
             mode.setTextColor(
@@ -93,11 +107,11 @@ class AppListAdapter(
                 },
             )
 
-            icon.tag = entry.packageName
+            icon.tag = entry.key
             icon.setImageDrawable(placeholder)
             IconCache.load(itemView.context, entry.packageName) { drawable ->
                 // 行可能已被回收给别的应用，落图前再确认一次。
-                if (icon.tag == entry.packageName) icon.setImageDrawable(drawable)
+                if (icon.tag == entry.key) icon.setImageDrawable(drawable)
             }
 
             itemView.setOnClickListener { onClick(entry, current) }

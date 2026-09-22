@@ -110,7 +110,10 @@ class MainActivity : AppCompatActivity() {
 
     private fun load() {
         worker.execute {
-            val apps = AppRepository.load(this)
+            // 先枚举分身：迁移需要知道每个包实际存在哪些分身 user。
+            val dual = AppRepository.loadDualApps(this)
+            ConfigStore.migrate(this, dual)
+            val apps = AppRepository.load(this, dual)
             runOnUiThread {
                 all = apps
                 loaded = true
@@ -140,7 +143,7 @@ class MainActivity : AppCompatActivity() {
         if (selecting) {
             selectCount.text = getString(R.string.select_count, selected.size)
             // 「全选」作用于当前筛选结果，因此可以先用搜索/系统应用筛选再一次性勾选。
-            val allSelected = visible.isNotEmpty() && visible.all { it.packageName in selected }
+            val allSelected = visible.isNotEmpty() && visible.all { it.key in selected }
             selectAll.setText(if (allSelected) R.string.select_none else R.string.select_all)
             for ((button, _) in batchButtons) button.isEnabled = selected.isNotEmpty()
         }
@@ -148,7 +151,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun onRowClick(entry: AppEntry, current: Int) {
         if (selecting) {
-            if (!selected.remove(entry.packageName)) selected.add(entry.packageName)
+            if (!selected.remove(entry.key)) selected.add(entry.key)
             render()
         } else {
             showModePicker(entry, current)
@@ -160,7 +163,7 @@ class MainActivity : AppCompatActivity() {
             selecting = true
             selected.clear()
         }
-        selected.add(entry.packageName)
+        selected.add(entry.key)
         render()
     }
 
@@ -171,20 +174,20 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun toggleSelectAll() {
-        val allSelected = visible.isNotEmpty() && visible.all { it.packageName in selected }
+        val allSelected = visible.isNotEmpty() && visible.all { it.key in selected }
         for (entry in visible) {
-            if (allSelected) selected.remove(entry.packageName) else selected.add(entry.packageName)
+            if (allSelected) selected.remove(entry.key) else selected.add(entry.key)
         }
         render()
     }
 
     private fun applyBatch(mode: Int) {
-        val pkgs = selected.toList()
-        if (pkgs.isEmpty()) return
-        ConfigStore.setModes(this, pkgs, mode)
+        val keys = selected.toList()
+        if (keys.isEmpty()) return
+        ConfigStore.setModes(this, keys, mode)
         Toast.makeText(
             this,
-            getString(R.string.batch_applied, pkgs.size, getString(modeLabelRes(mode))),
+            getString(R.string.batch_applied, keys.size, getString(modeLabelRes(mode))),
             Toast.LENGTH_SHORT,
         ).show()
         exitSelection()
@@ -194,7 +197,11 @@ class MainActivity : AppCompatActivity() {
         val sheet = layoutInflater.inflate(R.layout.sheet_mode, null)
         val dialog = BottomSheetDialog(this)
         dialog.setContentView(sheet)
-        sheet.findViewById<TextView>(R.id.sheet_title).text = entry.label
+        sheet.findViewById<TextView>(R.id.sheet_title).text = if (entry.userId == 0) {
+            entry.label
+        } else {
+            getString(R.string.dual_suffix, entry.label, entry.userId)
+        }
 
         val options = listOf(
             R.id.opt_default to Config.MODE_DEFAULT,
@@ -205,7 +212,7 @@ class MainActivity : AppCompatActivity() {
             val option = sheet.findViewById<MaterialRadioButton>(id)
             option.isChecked = mode == current
             option.setOnClickListener {
-                ConfigStore.setMode(this, entry.packageName, mode)
+                ConfigStore.setMode(this, entry.key, mode)
                 render()
                 dialog.dismiss()
             }

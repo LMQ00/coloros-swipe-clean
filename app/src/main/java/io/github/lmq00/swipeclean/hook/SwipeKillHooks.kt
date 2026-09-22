@@ -1,6 +1,7 @@
 package io.github.lmq00.swipeclean.hook
 
 import android.content.pm.ApplicationInfo
+import android.os.UserHandle
 import android.util.Log
 import io.github.libxposed.api.XposedInterface
 import io.github.libxposed.api.XposedModule
@@ -46,6 +47,7 @@ internal object SwipeKillHooks {
 
     private var infoField: Field? = null
     private var nameField: Field? = null
+    private var userField: Field? = null
 
     /** 前若干次判定打日志，用来确认 Hook 是否真的被划卡路径调用。 */
     private var queries = 0
@@ -72,23 +74,38 @@ internal object SwipeKillHooks {
         module.hook(method)
             .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
             .intercept { chain ->
-                val pkg = packageOf(chain.getArg(0))
+                val proc = chain.getArg(0)
+                val pkg = packageOf(proc)
+                val userId = userIdOf(proc)
+                val key = if (pkg == null) null else Config.key(pkg, userId)
                 if (queries < 5) {
                     queries++
-                    module.log(Log.INFO, TAG, "filter query: $pkg")
+                    module.log(Log.INFO, TAG, "filter query: $key")
                 }
-                when (if (pkg == null) Config.MODE_DEFAULT else ConfigBridge.modeOf(module, pkg)) {
+                when (if (pkg == null) Config.MODE_DEFAULT else ConfigBridge.modeOf(module, pkg, userId)) {
                     Config.MODE_KEEP -> {
-                        module.log(Log.INFO, TAG, "swipe-up keep: $pkg")
+                        module.log(Log.INFO, TAG, "swipe-up keep: $key")
                         FILTER_SKIP
                     }
                     Config.MODE_KILL -> {
-                        module.log(Log.INFO, TAG, "swipe-up force kill: $pkg")
+                        module.log(Log.INFO, TAG, "swipe-up force kill: $key")
                         FILTER_FORCE_KILL
                     }
                     else -> chain.proceed()
                 }
             }
+    }
+
+    /** `WindowProcessController.mInfo`（ApplicationInfo），包内可见，需 setAccessible。 */
+    private fun infoOf(proc: Any?): ApplicationInfo? {
+        if (proc == null) return null
+        val clazz = proc.javaClass
+        return runCatching {
+            (infoField ?: clazz.getDeclaredField("mInfo").also {
+                it.isAccessible = true
+                infoField = it
+            }).get(proc) as? ApplicationInfo
+        }.getOrNull()
     }
 
     /**
@@ -97,19 +114,30 @@ internal object SwipeKillHooks {
      */
     private fun packageOf(proc: Any?): String? {
         if (proc == null) return null
+        infoOf(proc)?.packageName?.let { return it }
         val clazz = proc.javaClass
-        val info = runCatching {
-            (infoField ?: clazz.getDeclaredField("mInfo").also {
-                it.isAccessible = true
-                infoField = it
-            }).get(proc) as? ApplicationInfo
-        }.getOrNull()
-        if (info?.packageName != null) return info.packageName
         return runCatching {
             (nameField ?: clazz.getDeclaredField("mName").also {
                 it.isAccessible = true
                 nameField = it
             }).get(proc) as? String
         }.getOrNull()?.substringBefore(':')
+    }
+
+    /**
+     * `WindowProcessController.mUserId`（实测字段，`WindowProcessController.java:122`）；
+     * 取不到时回退 `mInfo.uid` 经 `UserHandle.getUserId()`，再取不到按 0 处理。
+     */
+    private fun userIdOf(proc: Any?): Int {
+        if (proc == null) return 0
+        val direct = runCatching {
+            (userField ?: proc.javaClass.getDeclaredField("mUserId").also {
+                it.isAccessible = true
+                userField = it
+            }).getInt(proc)
+        }.getOrNull()
+        if (direct != null) return direct
+        val uid = infoOf(proc)?.uid ?: return 0
+        return UserHandle.getUserId(uid)
     }
 }

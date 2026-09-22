@@ -1,5 +1,6 @@
 package io.github.lmq00.swipeclean.hook
 
+import android.content.Context
 import android.util.Log
 import io.github.libxposed.api.XposedModule
 import io.github.libxposed.api.XposedModuleInterface
@@ -26,6 +27,7 @@ class ModuleMain : XposedModule() {
         // 若此时 athena 的类已可见就直接挂上；否则等 onPackageLoaded 或兜底重试。
         AthenaHooks.install(this, param.classLoader)
         AthenaHooks.installWhenReady(this)
+        ConfigBridge.install(this)
     }
 
     /** athena 的类由它自己的 APK 提供，要等该包在 system_server 内加载后再挂。 */
@@ -39,5 +41,12 @@ class ModuleMain : XposedModule() {
         const val TAG = "SwipeClean"
 
         private const val ATHENA_PACKAGE = "com.oplus.athena"
+
+        /** system_server 的 Context；拿不到返回 null。 */
+        internal fun systemContext(): Context? = runCatching {
+            val activityThread = Class.forName("android.app.ActivityThread")
+            val current = activityThread.getMethod("currentActivityThread").invoke(null)
+            activityThread.getMethod("getSystemContext").invoke(current) as? Context
+        }.getOrNull()
     }
 }

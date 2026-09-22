@@ -18,6 +18,12 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- Hook 侧（system_server，uid 1000）经 call() 拉取配置；authority 必须与 Config.AUTHORITY 一致。 -->
+        <provider
+            android:name=".ConfigProvider"
+            android:authorities="io.github.lmq00.swipeclean.config"
+            android:exported="true" />
     </application>
 
 </manifest>

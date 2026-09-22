@@ -20,6 +20,8 @@ import java.util.concurrent.atomic.AtomicBoolean
  *     -> ...clear.v (SwipeUpClearAction)#e1(Bundle)
  *          -> G0(String,...)   v.java:134-190
  *               - Z0(): 正在通话 / J0(): 该包还有其它任务 -> 跳过
+ *                 （两者都比较 pkgName 与 userId：Z0 用 t0.o.b(pkgName, uid)、
+ *                  J0 比较 recentTaskInfo.userId，同包名不同 user 互不影响，故本模块不介入）
  *               - 系统应用 -> I0()，普通应用 -> D0()
  *          -> E0()             v.java:121  统一移除任务卡片（与杀不杀无关）
  *        -> D0(...)            v.java:97-120   ← 本模块挂这里
@@ -75,7 +77,7 @@ internal object AthenaHooks {
     private var pkgField: Field? = null
     private var userField: Field? = null
     private var forceStopMethod: Method? = null
-    private var systemContext: Any? = null
+    private var systemContext: Context? = null
 
     /**
      * 兜底：`onPackageLoaded` 未按预期回调时，直接从 `ActivityThread#mPackages` 取
@@ -131,14 +133,17 @@ internal object AthenaHooks {
     /** `getStopTypeInner`：名单内返回 0（保留），其余交回系统。 */
     private fun hookStopType(module: XposedModule, method: Method) {
         module.hook(method).intercept { chain ->
-            val pkg = packageOf(chain.getArg(0))
-            when (if (pkg == null) Config.MODE_DEFAULT else ConfigBridge.modeOf(module, pkg)) {
+            val info = chain.getArg(0)
+            val pkg = packageOf(info)
+            val userId = userOf(info)
+            val key = if (pkg == null) null else Config.key(pkg, userId)
+            when (if (pkg == null) Config.MODE_DEFAULT else ConfigBridge.modeOf(module, pkg, userId)) {
                 Config.MODE_KEEP -> {
-                    module.log(Log.INFO, TAG, "athena keep: $pkg")
+                    module.log(Log.INFO, TAG, "athena keep: $key")
                     STOP_KEEP
                 }
                 Config.MODE_KILL -> {
-                    module.log(Log.INFO, TAG, "athena force kill: $pkg")
+                    module.log(Log.INFO, TAG, "athena force kill: $key")
                     STOP_FORCE_KILL
                 }
                 else -> chain.proceed()
@@ -162,15 +167,21 @@ internal object AthenaHooks {
                 module.hook(method).intercept { chain ->
                     val info = chain.getArg(4)
                     val pkg = packageOf(info)
-                    val mode = if (pkg == null) Config.MODE_DEFAULT else ConfigBridge.modeOf(module, pkg)
+                    val userId = userOf(info)
+                    val key = if (pkg == null) null else Config.key(pkg, userId)
+                    val mode = if (pkg == null) {
+                        Config.MODE_DEFAULT
+                    } else {
+                        ConfigBridge.modeOf(module, pkg, userId)
+                    }
                     when {
                         mode == Config.MODE_KEEP -> {
-                            module.log(Log.INFO, TAG, "athena swipe keep: $pkg")
+                            module.log(Log.INFO, TAG, "athena swipe keep: $key")
                             null
                         }
                         mode == Config.MODE_KILL && pkg != null -> {
-                            module.log(Log.INFO, TAG, "athena swipe force kill: $pkg")
-                            forceStopAsync(pkg, userOf(info))
+                            module.log(Log.INFO, TAG, "athena swipe force kill: $key")
+                            forceStopAsync(pkg, userId)
                             null
                         }
                         else -> chain.proceed()
@@ -196,11 +207,7 @@ internal object AthenaHooks {
             )
         }.onFailure { Log.w(TAG, "athena force-stop helper not found", it) }.getOrNull()
 
-        systemContext = runCatching {
-            val activityThread = Class.forName("android.app.ActivityThread")
-            val current = activityThread.getMethod("currentActivityThread").invoke(null)
-            activityThread.getMethod("getSystemContext").invoke(current)
-        }.getOrNull()
+        systemContext = ModuleMain.systemContext()
     }
 
     /**

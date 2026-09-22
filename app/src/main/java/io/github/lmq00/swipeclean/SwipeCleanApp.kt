@@ -1,19 +1,13 @@
 package io.github.lmq00.swipeclean
 
 import android.app.Application
-import android.util.Log
 import com.google.android.material.color.DynamicColors
-import io.github.libxposed.service.XposedService
-import io.github.libxposed.service.XposedServiceHelper
 
 /**
- * 绑定 LSPosed 的模块服务。
+ * 应用入口：只负责 DynamicColors。
  *
- * Hook 侧读的是框架侧存储（`XposedInterface#getRemotePreferences`），
- * 而不是本 App 的 SharedPreferences——两者只能通过 [XposedService] 打通：
- * 框架调用本 App 的 `XposedProvider`（authority `<applicationId>.XposedService`）
- * 下发 binder，之后 App 用 `getRemotePreferences(GROUP)` 写入的那份数据，
- * 就是 Hook 侧 `getRemotePreferences(GROUP)` 读到的那份。
+ * 配置通道是 [ConfigProvider]（Hook 主动 `call()` 拉取）+ [Config.ACTION_CONFIG_CHANGED] 广播，
+ * 不再需要绑定 LSPosed 服务，因此这里没有任何初始化逻辑。
  */
 class SwipeCleanApp : Application() {
 
@@ -21,20 +15,5 @@ class SwipeCleanApp : Application() {
         super.onCreate()
         // 跟随系统取色（Material You），与 KernelSU 等系统工具的观感一致。
         DynamicColors.applyToActivitiesIfAvailable(this)
-        XposedServiceHelper.registerListener(object : XposedServiceHelper.OnServiceListener {
-            override fun onServiceBind(service: XposedService) {
-                Log.i(TAG, "xposed service bound: ${service.frameworkName} ${service.frameworkVersion}")
-                ConfigStore.attach(this@SwipeCleanApp, service)
-            }
-
-            override fun onServiceDied(service: XposedService) {
-                Log.w(TAG, "xposed service died")
-                ConfigStore.detach(service)
-            }
-        })
-    }
-
-    private companion object {
-        const val TAG = "SwipeClean"
     }
 }
