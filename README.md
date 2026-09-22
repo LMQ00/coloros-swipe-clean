@@ -13,6 +13,12 @@ ColorOS / realme UI 上自由控制「最近任务划卡能否杀死 App」的 L
 | 划卡不杀 | 划掉卡片后进程保留（卡片照常消失） |
 | 划卡必杀 | 划掉卡片后强制结束进程（即使持有前台服务） |
 
+**应用分身（多开）**：分身是独立的系统 user，与本体**包名相同、uid 不同**
+（如拼多多本体 `10367`、分身 `99810367`）。
+
+> 当前版本：分身与本体**共用一条设置**（给本体设「必杀」，分身也会被必杀）。
+> 「本体与分身各自独立设置」已定方案、待实施，届时列表里本体条目下会展开分身子项。
+
 ## 使用
 
 - 顶部搜索框按应用名/包名过滤；右侧 **系统应用** 开关决定是否列出系统应用。
@@ -48,7 +54,11 @@ ColorOS / realme UI 上自由控制「最近任务划卡能否杀死 App」的 L
 微信这类常驻应用两条都会被放行。因此模块额外挂 `D0` 本身：必杀时直接调用 athena 自己的
 force-stop（`utils.p.b`），与系统清理走同一条路。
 
-细节、返回值语义与出处见 [`doc/athena-reverse.md`](doc/athena-reverse.md)。
+`G0` 的闸门（通话中 `Z0`、同包多任务 `J0`）都同时比较 `pkgName` 与 `userId`，
+因此本体与各分身互不影响。
+
+细节、返回值语义与出处见 [`docs/athena-reverse.md`](docs/athena-reverse.md)，
+模块结构与配置通道见 [`docs/architecture.md`](docs/architecture.md)。
 
 ## 安装
 
@@ -58,6 +68,12 @@ force-stop（`utils.p.b`），与系统清理走同一条路。
 3. 重启设备。
 4. **打开一次 App**：配置通过 libxposed 服务通道写入框架侧，框架只在 App 进程启动时下发该通道。
    之后每次改动名单都会实时推送。
+5. **每次重装模块 APK 后需完整重启设备**：重装不会重新下发该通道，配置改动只写进本地，
+   实际行为不变（表现为「UI 里改有反馈、划卡没变化」）。完整重启后打开一次 App 即恢复。
+   软重启 zygote 无效。
+
+> 第 4、5 步的限制来自当前使用的 libxposed 服务通道，已定方案改为 App ContentProvider +
+> 广播后，这两步都不再需要。
 
 ## 构建
 
@@ -73,6 +89,7 @@ APK 产物：`app/build/outputs/apk/release/app-release.apk`。
 但无法覆盖由官方 Release 安装的版本。
 
 CI：推送到 `main` 后由 GitHub Actions 编译，产物在 Actions 的 Artifacts（`swipe-clean-release`）中下载。
+纯文档改动（`**.md` / `docs/**`）不触发编译。
 
 ## 兼容性
 
@@ -85,6 +102,10 @@ CI：推送到 `main` 后由 GitHub Actions 编译，产物在 Actions 的 Artif
 - **系统应用不受名单控制**：`G0()` 把 `procDetailInfo.system == true` 的应用交给另一分支 `I0()`，
   该分支不经过 `getStopType`。UI 默认不显示系统应用，与此一致。
 - **最近任务里手动锁定过的卡片**由 `isRecentLockTask` 保护，本模块不覆盖。
+- **同一 userId 下同包多任务**：某应用在**同一个 user** 里有多张卡片时，划掉其中一张不会杀进程——
+  athena 的 `J0()` 检测到该包还有其它任务会跳过整段处理。本体与分身是不同 user，
+  **不受此限制影响**。属系统既有行为，模块不介入。
+- **分身当前无法单独设置**（见「行为」一节），本体与分身共用一条设置。
 - 「划卡不杀」名单同时会让该应用不被 athena 的后台内存清理回收（两者共用同一判定入口）。
 
 ## 排查
@@ -96,8 +117,9 @@ CI：推送到 `main` 后由 GitHub Actions 编译，产物在 Actions 的 Artif
    `swipe hooks installed: 2` / `athena hooks installed: 1` / `athena swipe hooks installed: 1`。
 3. 若出现 `swipe-up keep:` / `athena swipe keep:` 但进程仍死，属未覆盖的路径，请附日志反馈。
 4. **改了配置但不生效**（最常见）：配置要经 libxposed 服务通道写到框架侧，而该通道只在
-   模块 App 进程启动时由框架下发。**每次重装 APK 后通道都会失效，直到重启一次**，
-   表现为 UI 里改有反馈、实际行为不变。判定：`su -c 'logcat -d -s SwipeClean'` 里
-   没有 `xposed service bound:` 输出。重启后打开一次 App 即可自动把名单同步过去。
+   模块 App 进程启动时由框架下发，且每个 uid 每轮开机只发一次。**每次重装模块 APK 后通道都会
+   失效**，表现为 UI 里改有反馈、实际行为不变。判定：`su -c 'logcat -d -s SwipeClean'` 里
+   没有 `xposed service bound:` 输出。**必须完整重启设备**（软重启 zygote 无效），
+   重启后打开一次 App 即可自动把名单同步过去。详见 [`docs/development.md`](docs/development.md)。
 
 开发与接手说明见 [`AGENTS.md`](AGENTS.md)。

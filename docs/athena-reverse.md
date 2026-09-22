@@ -71,8 +71,8 @@ com.oplus.athena.systemservice.action.prockill.clear.d#G0(Bundle)          // Cl
   -> v.A0().e1(bundle)                                                     // SwipeUpClearAction
      v.java:581  e1(Bundle)：逐条 F("swipeup_forcestop_clear", 40) -> G0(...)
        -> G0(String,...)   v.java:134-190
-          - Z0(): 正在通话 -> 跳过
-          - J0(): 该包还有其它任务 -> 跳过
+          - Z0(): 正在通话 -> 跳过（t0.o.b(pkgName, uid)，带 uid）
+          - J0(): 同一 userId 下该包还有其它任务 -> 跳过（v.java:245，同时比较 pkgName 与 userId）
           - 系统应用走 I0()，普通应用走 D0()
        -> D0(...)          v.java:97-120
           int stopType = FilterHelper.getInstance().getStopType(procDetailInfo, aVar);
@@ -258,12 +258,31 @@ Hook 侧 `XposedInterface#getRemotePreferences(group)` 读的是**框架侧存�
 3. App 通过 `XposedServiceHelper.registerListener` 拿到服务，
    用 `service.getRemotePreferences(GROUP).edit()...commit()` 写入。
 
-两个坑：
+三个坑：
 
 - 若 App 在**尚未带上 `XposedProvider` 的版本**时启动过，框架那一次下发失败但 uid 已记入
   `uidSet`，之后同一轮开机不会再发 —— 需要重启设备后才恢复正常。
 - `getRemotePreferences` 只在 App 注册过该 group 之后才对 Hook 侧可见；
   App 未启动过时 Hook 读到空集（表现为所有应用都按「默认」放行）。
+- **重装模块 APK 后通道失效**（2026-09-22 实锤）：uid 不变，LSPosed 认为「已发过」而不再下发
+  binder；`ConfigStore.push()` 首行 `val target = remote ?: return` 静默返回，
+  本地写成功、框架侧永远不变，且无任何日志。
+
+  时间证据：
+
+  ```
+  App config.xml           mtime = 2026-09-22 20:43:58    ← 用户设置必杀
+  modules_config.db-wal    mtime = 2026-09-22 20:52:28    ← 框架侧才被写入（重启后 App 启动那一刻）
+  ```
+
+  期间划卡，Hook 读到空 `kill`，走系统原生路径 → 杀不掉。
+  **软重启 zygote 不足以恢复，必须完整重启设备。**
+
+  > 读 `modules_config.db` 验证配置时**必须连 `-wal` 一起复制**，否则读到旧快照，
+  > 会得出「配置为空」的错误结论。详见 [`development.md`](development.md)。
+
+该通道的失效模式已确定要消除，改造方案（App ContentProvider + 广播）见
+[`architecture.md`](architecture.md)。
 
 ## 7. 失效风险
 
@@ -287,8 +306,19 @@ Hook 侧 `XposedInterface#getRemotePreferences(group)` 读的是**框架侧存�
    `system` 判定，属于系统自带白名单，模块不介入。）
 5. **`WindowProcessController` 字段**：`mInfo` / `mName` 为包内可见字段，若被重命名则取不到包名，
    该次调用按「默认」处理。
-6. **多任务场景**：`G0()` 中 `J0()`（该包还有其它任务）会跳过 kill；此时划掉一张卡不会杀进程，
-   属系统既有行为，不受本模块控制。
+6. **多任务场景**：`G0()` 中 `J0()` 在**同一 userId** 下该包还有其它任务时跳过 kill；
+   此时划掉一张卡不会杀进程，属系统既有行为，不受本模块控制。
+   `J0`（`v.java:245`）同时比较 `pkgName` 与 `userId`：
+
+   ```java
+   if (procDetailInfo.pkgName.equals(intent.getComponent().getPackageName())
+       && recentTaskInfo.userId == procDetailInfo.userId      // ← 同时比较 userId
+       && !T0(procDetailInfo, recentTaskInfo)) {
+       return true;
+   }
+   ```
+
+   因此**本体与各分身（不同 user）互不影响**。
 7. **最近任务锁定**：用户手动锁定过的卡片由 `isRecentLockTask` 保护，本模块不覆盖该路径。
 
 ## 8. 实机验证记录
@@ -319,4 +349,64 @@ Hook 侧 `XposedInterface#getRemotePreferences(group)` 读的是**框架侧存�
 
   即旧进程在划卡瞬间结束、3 秒后由系统重新拉起。
 
-未覆盖（见 §7）：系统应用分支 `I0()`、最近任务锁定的卡片。
+### 2026-09-22：必杀对拼多多（`com.xunmeng.pinduoduo`）
+
+```
+20:53:51.779  config loaded: keep=[com.termux, github.tornaco.android.thanos.pro, com.omarea.vtools] kill=[com.xunmeng.pinduoduo]
+20:53:51.779  athena swipe force kill: com.xunmeng.pinduoduo
+20:53:51.782  swipe-up force kill: com.xunmeng.pinduoduo      ← 框架侧 Hook 1/2，共 3 次
+
+20:53:40.311  am_proc_start: [0,24234,10367,com.xunmeng.pinduoduo,next-top-activity,MainFrameActivity]
+20:53:51.806  am_kill: [0,24380,com.xunmeng.pinduoduo:titan,450,stop com.xunmeng.pinduoduo due to o-stop(0),337952]
+20:53:51.815  am_kill: [0,24645,com.xunmeng.pinduoduo:sandboxed_process0,450,stop com.xunmeng.pinduoduo due to o-stop(0),389080]
+20:53:51.820  am_kill: [0,24234,com.xunmeng.pinduoduo,0,stop com.xunmeng.pinduoduo due to o-stop(0),750660]
+```
+
+- [x] 必杀命中后，主进程 + `:titan` + `:sandboxed_process0` **三个进程瞬间全部结束**。
+- [x] 之后 100 秒（每秒采样）无进程、无 `am_proc_start` → **force-stop 后不会被自动拉起**。
+      （与上条 `com.tencent.mm` 的「3 秒后被拉起」不同：微信有常驻推送链路，拼多多此处没有。）
+- [x] 该轮 `am_proc_start` 的 reason 全为 `next-top-activity`（用户主动打开），无自启类型记录。
+
+> 判读「是否被自动拉起」必须看 `am_proc_start` 的 reason 字段：
+> `next-top-activity` = 用户主动打开，`broadcast` / `service` / `content provider` = 自启。
+> 只看进程是否存在会被「用户手动打开」污染。
+
+> 该轮之前有一次「划卡杀不掉」的观察，根因是**配置通道失效**（§6 第三个坑），
+> 不是 force-stop 不够强：用户 20:43:58 设的必杀名单，直到 20:52:28（重启后）才写入框架侧。
+
+### 2026-09-22：应用分身（多开）
+
+ColorOS 分身 = 独立 user（类型 `MultiApp`，`parentId=0`），**包名与本体相同**，仅 uid 不同：
+
+```
+UserInfo{998:MultiApp:4001010} serialNo=11 isPrimary=false parentId=0
+UserInfo{999:MultiApp:4001010} serialNo=10 isPrimary=false parentId=0
+
+pm list packages -U --user 0    → package:com.xunmeng.pinduoduo uid:10367
+pm list packages -U --user 998  → package:com.xunmeng.pinduoduo uid:99810367
+pm list packages -U --user 999  → package:com.xunmeng.pinduoduo uid:99910367
+```
+
+`99810367 = 10367 + 998 × 100000`。`MultiAppConstants.java:44`（`OplusMultiApp.apk`）的
+`USER_ID_MULTI_APP = 999` 只是**首个**分身的 id，**userId 不固定**。
+
+划卡实测（两个分身同时在运行，各划一次）：
+
+```
+21:29:51.060  am_kill: [998,20017,com.xunmeng.pinduoduo:titan,475,stop … due to o-stop(0),…]
+21:29:51.065  am_kill: [998,19671,com.xunmeng.pinduoduo,475,stop … due to o-stop(0),…]
+21:29:51.078  am_kill: [998,20519,com.xunmeng.pinduoduo:support,0,stop … due to o-stop(0),…]
+21:29:51.375  am_kill: [999,18737,com.xunmeng.pinduoduo:titan,0,stop … due to o-stop(0),…]
+21:29:51.383  am_kill: [999,18468,com.xunmeng.pinduoduo,500,stop … due to o-stop(0),…]
+21:32:08.952  am_kill: [0,23107,com.xunmeng.pinduoduo,0,stop … due to o-stop(0),…]
+```
+
+- [x] **分身受包名名单控制**：998 / 999 / 0 的进程均被 `o-stop(0)` 结束。
+- [x] **Hook 4 的 userId 传递正确**：`am_kill` 首字段分别标记 998 / 999 / 0，未互相误伤。
+- [x] 998 与 999 同时有任务时，划掉 998 的卡只杀 998 —— 印证 §7.6 的 `J0` 按 userId 隔离。
+- [ ] 现状**无法区分本体与分身**：名单是包级 StringSet，一条记录同时命中三者（待改造）。
+
+> 注：模块日志只打 `pkg`，看不出 userId。改造后日志须带 userId，否则分身场景无法验证。
+
+未覆盖（见 §7）：系统应用分支 `I0()`、最近任务锁定的卡片、
+**同一 userId 下**同包多任务（`J0` 跳过）。
