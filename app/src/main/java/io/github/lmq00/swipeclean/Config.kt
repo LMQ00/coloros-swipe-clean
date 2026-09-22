@@ -18,8 +18,11 @@ object Config {
     /** 本地 SharedPreferences 文件名。沿用旧名 "config"，升级不丢配置。 */
     const val PREFS = "config"
 
+    /** 模块自身包名（= applicationId）。用于放行自身 provider 冷启动等自指判断。 */
+    const val MODULE_PACKAGE = "io.github.lmq00.swipeclean"
+
     /** [ConfigProvider] 的 authority。必须与 AndroidManifest.xml 中的声明逐字一致。 */
-    const val AUTHORITY = "io.github.lmq00.swipeclean.config"
+    const val AUTHORITY = MODULE_PACKAGE + ".config"
 
     /** [ConfigProvider.call] 的取配置方法名。 */
     const val METHOD_GET = "get"

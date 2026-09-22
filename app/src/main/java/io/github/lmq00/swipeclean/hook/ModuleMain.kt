@@ -24,6 +24,8 @@ class ModuleMain : XposedModule() {
 
     override fun onSystemServerStarting(param: XposedModuleInterface.SystemServerStartingParam) {
         SwipeKillHooks.install(this, param.classLoader)
+        // 放行本模块 App 自己的 provider 冷启动，否则 ColorOS 会拦掉配置拉取。
+        AppStartupHooks.install(this, param.classLoader)
         // 若此时 athena 的类已可见就直接挂上；否则等 onPackageLoaded 或兜底重试。
         AthenaHooks.install(this, param.classLoader)
         AthenaHooks.installWhenReady(this)
