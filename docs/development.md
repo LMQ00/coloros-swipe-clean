@@ -180,14 +180,15 @@ su -c 'logcat -b events -d' | grep -a -E "am_kill|am_proc_start" | grep -a <pkg>
   （`v.java:245`），`Z0` 也带 uid
 
 **模块侧枚举**（已实现）：`AppRepository.loadDualApps()` 用 `LauncherApps.getProfiles()` +
-`getActivityList(null, user)`，userId 由 `ApplicationInfo.uid / 100000` 反推。
-打开 App 后其进程日志里应有：
+`getActivityList(null, user)`，userId 由 `ApplicationInfo.uid / 100000` 反推；
+分身序号用 `getLauncherUserInfo(user).userSerialNumber` 排名。打开 App 后其进程日志里应有：
 
 ```
-dual users=[998, 999] packages={998=…, 999=…}
+dual users=[998, 999] ordinals={999=1, 998=2} packages={998=…, 999=…}
 ```
 
-列表里本体条目下会展开出 `拼多多 · #998` / `拼多多 · #999` 子项，各自独立设置。
+列表里本体条目下会展开出 `拼多多 · 分身1` / `拼多多 · 分身2` 子项（图标带 ROM 的分身序号角标），
+各自独立设置。
 
 **测试样本**：拼多多 `com.xunmeng.pinduoduo`，user 998 / 999 各一个分身
 （uid `99810367` / `99910367`），本体 uid `10367`。

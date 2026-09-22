@@ -152,6 +152,17 @@ if (procDetailInfo.pkgName.equals(intent.getComponent().getPackageName())
 
 实测印证：998 与 999 同时有任务时，划掉 998 的卡只杀 998，999 完好。
 
+### UI 呈现（已实现）
+
+- **图标**：分身行用 `LauncherActivityInfo#getBadgedIcon(density)`（公开 API，API 21+），
+  ColorOS 在这里画的就是 launcher 里那个分身序号角标。本体行无角标。
+  缓存键为 `<pkg>#<userId>`（`IconCache`），分身与本体图标不同。
+- **序号**：`LauncherApps#getLauncherUserInfo(user).userSerialNumber` 按 serial 升序排名
+  （API 35+，只做 `canAccessProfile` 校验）。实测 `ordinals={999=1, 998=2}`，与角标数字一致。
+  取不到时退回显示真实 userId。
+- **标题**：`AppEntry#title(context)` → `拼多多 · 分身2`；列表行与设置面板标题共用，两处一致。
+- **缩进**：分身行左侧内缩 32dp，本体的 padding 在 `Holder` 构造时捕获后按 user 叠加。
+
 ### 现状行为（已实施）
 
 名单元素为 `<pkg>#<userId>`，本体与各分身各自独立设置。实测（2026-09-23，配置为
@@ -264,11 +275,11 @@ config pull failed: NPE at ActivityThread.acquireProvider
 | `hook/AthenaHooks.kt` | userId 用 `ProcDetailInfo.userId`；日志带 userId |
 | `hook/AppStartupHooks.kt` | **新增**，见「第 5 个 Hook」 |
 | `AppRepository.kt` | `AppEntry` 加 `userId` / `key`；新增 `loadDualApps()`；`load()` 为每个分身展开一行 |
-| `AppListAdapter.kt` / `MainActivity.kt` | 分身子项缩进显示，**userId 放在行标题**（`拼多多 · #998`）；选择与写入一律按 `entry.key` |
+| `AppListAdapter.kt` / `MainActivity.kt` | 分身子项缩进显示；图标用 `getBadgedIcon`（ROM 分身角标），标题 `拼多多 · 分身2`（列表与设置面板共用 `AppEntry#title()`）；选择与写入一律按 `entry.key` |
 
 > Bundle 用 `putStringArray` / `getStringArray` 而非 `putStringSet` / `getStringSet`：
 > 后两者不是公开 API，CI 编译期不可见（`javap` 实测）。
-> 行标题而非副标题放 userId：`item_app.xml` 的 `ellipsize=end` 会把副标题里的 `· #998` 截掉。
+> 行标题而非副标题放分身标识：`item_app.xml` 的 `ellipsize=end` 会把副标题里的标识截掉。
 
 ### 验收结果（2026-09-23，实机）
 
@@ -288,7 +299,7 @@ config pull failed: NPE at ActivityThread.acquireProvider
 | 5 | 本体必杀 + 分身不杀 | ✅ | 划本体卡 → `am_kill [0,…]` ×3；`u998_a367` 三进程存活 |
 | 6 | 两个分身各自独立 | ✅ | `athena swipe keep: …#998` / `…#999`，两者均无 `am_kill` |
 | 7 | 日志带 userId | ✅ | `athena swipe force kill: com.xunmeng.pinduoduo#0`、`…keep: …#998` |
-| 8 | UI 展开分身子项 | ✅ | 列表 3 行：`拼多多`（必杀）/ `拼多多 · #998`（不杀）/ `拼多多 · #999`（不杀），各自独立 |
+| 8 | UI 展开分身子项 | ✅ | 列表 3 行：`拼多多`（必杀，无角标）/ `拼多多 · 分身2`（不杀，角标 2）/ `拼多多 · 分身1`（不杀，角标 1），各自独立 |
 
 旧名单迁移（`<pkg>` → `<pkg>#0` + 各实际分身）在软重启后的首次拉取即完成：
 
