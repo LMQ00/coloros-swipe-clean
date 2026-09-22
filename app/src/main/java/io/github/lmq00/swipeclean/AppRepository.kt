@@ -112,8 +112,9 @@ object AppRepository {
         if (Build.VERSION.SDK_INT >= 35) {
             val serials = HashMap<Int, Long>()
             for ((userId, handle) in found) {
-                val serial = runCatching { launcherApps.getLauncherUserInfo(handle)?.userSerialNumber }
-                    .getOrNull()
+                val serial = runCatching {
+                    launcherApps.getLauncherUserInfo(handle)?.userSerialNumber?.toLong()
+                }.getOrNull()
                 if (serial != null && serial >= 0L) serials[userId] = serial
             }
             val bySerial = serials.entries.sortedBy { it.value }
