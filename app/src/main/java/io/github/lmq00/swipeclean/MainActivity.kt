@@ -197,11 +197,7 @@ class MainActivity : AppCompatActivity() {
         val sheet = layoutInflater.inflate(R.layout.sheet_mode, null)
         val dialog = BottomSheetDialog(this)
         dialog.setContentView(sheet)
-        sheet.findViewById<TextView>(R.id.sheet_title).text = if (entry.userId == 0) {
-            entry.label
-        } else {
-            getString(R.string.dual_suffix, entry.label, entry.userId)
-        }
+        sheet.findViewById<TextView>(R.id.sheet_title).text = entry.title(this)
 
         val options = listOf(
             R.id.opt_default to Config.MODE_DEFAULT,

@@ -5,6 +5,7 @@ import android.content.pm.ApplicationInfo
 import android.content.pm.LauncherApps
 import android.content.pm.PackageManager
 import android.graphics.drawable.Drawable
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.Process
@@ -24,15 +25,29 @@ data class AppEntry(
     /** `0` = 本体；其余为分身（独立 user）的 userId。 */
     val userId: Int,
     val system: Boolean,
+    /** 分身在 ColorOS 里的序号（与 launcher 图标角标一致）；`0` = 本体或序号未知。 */
+    val ordinal: Int = 0,
 ) {
     /** 配置名单里的元素：`<pkg>#<userId>`。 */
     val key: String get() = Config.key(packageName, userId)
+
+    /**
+     * 列表与设置面板显示用标题：分身优先显示 ColorOS 的序号（与图标角标里的数字一致），
+     * 序号拿不到时退回真实 userId。
+     */
+    fun title(context: Context): String = when {
+        userId == 0 -> label
+        ordinal > 0 -> context.getString(R.string.dual_ordinal, label, ordinal)
+        else -> context.getString(R.string.dual_suffix, label, userId)
+    }
 }
 
 /** 分身枚举结果：user 列表 + 每个 user 下已安装（有 launcher 入口）的包集合。 */
 data class DualApps(
     val userIds: List<Int>,
     val packages: Map<Int, Set<String>>,
+    /** 分身 userId → ColorOS 序号；空表示取不到（UI 会退回显示 userId）。 */
+    val ordinals: Map<Int, Int> = emptyMap(),
 ) {
     /** 该包存在分身的 user 列表；本体（0）不在此列。 */
     fun usersOf(pkg: String): List<Int> = userIds.filter { pkg in packages[it].orEmpty() }
@@ -88,9 +103,27 @@ object AppRepository {
             found[userId] = profile
         }
         handles.putAll(found)
+
+        // ColorOS 的分身序号（= launcher 图标角标里的数字）：按 user serial 升序排名。
+        // 实测 999→1、998→2（serialNo 10 / 11），与角标一致。
+        // getLauncherUserInfo 是 API 35+，且只做 canAccessProfile 校验（与 getActivityList 同一道门）；
+        // 取不到时 ordinals 留空，UI 退回显示真实 userId。
+        val ordinals = LinkedHashMap<Int, Int>()
+        if (Build.VERSION.SDK_INT >= 35) {
+            val serials = found.mapValues { (_, handle) ->
+                runCatching { launcherApps.getLauncherUserInfo(handle)?.userSerialNumber ?: -1L }
+                    .getOrDefault(-1L)
+            }
+            serials.entries.filter { it.value >= 0L }.sortedBy { it.value }
+                .forEachIndexed { index, entry -> ordinals[entry.key] = index + 1 }
+        }
+
         val userIds = packages.keys.sorted()
-        Log.i(TAG, "dual users=$userIds packages=${packages.mapValues { it.value.size }}")
-        return DualApps(userIds, packages)
+        Log.i(
+            TAG,
+            "dual users=$userIds ordinals=$ordinals packages=${packages.mapValues { it.value.size }}",
+        )
+        return DualApps(userIds, packages, ordinals)
     }
 
     /**
@@ -136,7 +169,9 @@ object AppRepository {
                 (ApplicationInfo.FLAG_SYSTEM or ApplicationInfo.FLAG_UPDATED_SYSTEM_APP)) != 0
             entries.add(AppEntry(label, info.packageName, 0, system))
             for (userId in dual.usersOf(info.packageName)) {
-                entries.add(AppEntry(label, info.packageName, userId, system))
+                entries.add(
+                    AppEntry(label, info.packageName, userId, system, dual.ordinals[userId] ?: 0),
+                )
             }
         }
         entries.sortWith(

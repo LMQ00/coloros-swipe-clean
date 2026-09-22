@@ -67,13 +67,8 @@ class AppListAdapter(
         private val indentPx = (itemView.resources.displayMetrics.density * 32).toInt()
 
         fun bind(entry: AppEntry, current: Int, selecting: Boolean, checked: Boolean) {
-            // 分身行的 userId 放在标题行：副标题是包名，`ellipsize=end` 会把 `· #998` 截掉，
-            // 放在副标题里等于看不见，列表里就分不清哪行是哪个分身。
-            label.text = if (entry.userId == 0) {
-                entry.label
-            } else {
-                itemView.context.getString(R.string.dual_suffix, entry.label, entry.userId)
-            }
+            // 分身行显示 ColorOS 的序号（与图标角标里的数字一致）；拿不到序号才退回 userId。
+            label.text = entry.title(itemView.context)
             pkg.text = entry.packageName
             itemView.setPaddingRelative(
                 basePaddingStart + if (entry.userId == 0) 0 else indentPx,
