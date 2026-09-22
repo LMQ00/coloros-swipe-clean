@@ -110,12 +110,16 @@ object AppRepository {
         // 取不到时 ordinals 留空，UI 退回显示真实 userId。
         val ordinals = LinkedHashMap<Int, Int>()
         if (Build.VERSION.SDK_INT >= 35) {
-            val serials = found.mapValues { (_, handle) ->
-                runCatching { launcherApps.getLauncherUserInfo(handle)?.userSerialNumber ?: -1L }
-                    .getOrDefault(-1L)
+            val serials = HashMap<Int, Long>()
+            for ((userId, handle) in found) {
+                val serial = runCatching { launcherApps.getLauncherUserInfo(handle)?.userSerialNumber }
+                    .getOrNull()
+                if (serial != null && serial >= 0L) serials[userId] = serial
             }
-            serials.entries.filter { it.value >= 0L }.sortedBy { it.value }
-                .forEachIndexed { index, entry -> ordinals[entry.key] = index + 1 }
+            val bySerial = serials.entries.sortedBy { it.value }
+            for (index in bySerial.indices) {
+                ordinals[bySerial[index].key] = index + 1
+            }
         }
 
         val userIds = packages.keys.sorted()
