@@ -112,8 +112,8 @@ internal object ConfigBridge {
             return
         }
         lastPullOk = true
-        val newKeep = bundle.getStringSet(Config.KEY_KEEP)?.toSet() ?: emptySet()
-        val newKill = bundle.getStringSet(Config.KEY_KILL)?.toSet() ?: emptySet()
+        val newKeep = bundle.getStringArray(Config.KEY_KEEP)?.toSet() ?: emptySet()
+        val newKill = bundle.getStringArray(Config.KEY_KILL)?.toSet() ?: emptySet()
         if (firstPull || newKeep != keep || newKill != kill) {
             firstPull = false
             module.log(Log.INFO, TAG, "config loaded: keep=$newKeep kill=$newKill")

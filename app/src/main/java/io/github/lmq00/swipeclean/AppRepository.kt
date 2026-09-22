@@ -7,7 +7,7 @@ import android.content.pm.PackageManager
 import android.graphics.drawable.Drawable
 import android.os.Handler
 import android.os.Looper
-import android.os.UserHandle
+import android.os.Process
 import android.util.Log
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
@@ -41,6 +41,9 @@ object AppRepository {
 
     private const val TAG = "SwipeClean"
 
+    /** `UserHandle.PER_USER_RANGE`：uid 里 user 部分的步长（uid = userId * 100000 + appId）。 */
+    private const val PER_USER_RANGE = 100_000
+
     /**
      * 枚举当前 user 所属 profile group 内除本体外的 user，以及各 user 下已安装的应用。
      *
@@ -51,27 +54,31 @@ object AppRepository {
      * - `LauncherAppsService#getLauncherActivities` → `canAccessProfile` → `isProfileAccessible`
      *   对同 profileGroupId 的已启用 user 返回 true。
      *
+     * userId 由 `ApplicationInfo.uid` 反推（`uid / PER_USER_RANGE`）：`UserHandle` 的
+     * `of()/getUserId()/myUserId()/getIdentifier()` 都是系统 API，普通应用编译期不可见。
+     *
      * 局限：只覆盖带 launcher 入口（`MAIN`/`LAUNCHER`）的应用；无入口的分身应用不会列出。
      */
     fun loadDualApps(context: Context): DualApps {
         val launcherApps = context.getSystemService(LauncherApps::class.java)
             ?: return DualApps(emptyList(), emptyMap())
-        val userIds = runCatching {
-            launcherApps.profiles.map { it.identifier }
-                .filter { it != UserHandle.myUserId() }
-                .sorted()
-        }.getOrElse {
+        val self = Process.myUid() / PER_USER_RANGE
+        val profiles = runCatching { launcherApps.profiles }.getOrElse {
             Log.w(TAG, "enumerate profiles failed", it)
             return DualApps(emptyList(), emptyMap())
         }
-        val packages = userIds.associateWith { userId ->
-            runCatching {
-                launcherApps.getActivityList(null, UserHandle.of(userId))
-                    .map { it.applicationInfo.packageName }
-                    .toSet()
-            }.onFailure { Log.w(TAG, "list activities for user $userId failed", it) }
-                .getOrDefault(emptySet())
+        val packages = LinkedHashMap<Int, Set<String>>()
+        for (profile in profiles) {
+            val apps = runCatching {
+                launcherApps.getActivityList(null, profile).map { it.applicationInfo }
+            }.onFailure { Log.w(TAG, "list activities failed", it) }.getOrDefault(emptyList())
+            // 该 user 下一个 launcher 入口都没有：没有可配置的行，直接跳过。
+            if (apps.isEmpty()) continue
+            val userId = apps.first().uid / PER_USER_RANGE
+            if (userId == self) continue
+            packages[userId] = apps.map { it.packageName }.toSet()
         }
+        val userIds = packages.keys.sorted()
         Log.i(TAG, "dual users=$userIds packages=${packages.mapValues { it.value.size }}")
         return DualApps(userIds, packages)
     }

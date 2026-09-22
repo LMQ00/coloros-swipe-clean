@@ -6,7 +6,6 @@ import android.database.Cursor
 import android.net.Uri
 import android.os.Binder
 import android.os.Bundle
-import android.os.Process
 import android.util.Log
 
 /**
@@ -25,7 +24,7 @@ class ConfigProvider : ContentProvider() {
 
     override fun call(method: String, arg: String?, extras: Bundle?): Bundle? {
         val uid = Binder.getCallingUid()
-        if (uid != Process.SYSTEM_UID) {
+        if (uid != SYSTEM_UID) {
             Log.w(TAG, "rejected config call from uid $uid")
             return null
         }
@@ -36,14 +35,15 @@ class ConfigProvider : ContentProvider() {
             ConfigStore.migrate(context, AppRepository.loadDualApps(context))
         }
         val prefs = ConfigStore.prefs(context)
+        // 用 StringArray 而非 StringSet：Bundle 的 putStringSet/getStringSet 不是公开 API。
         return Bundle().apply {
-            putStringSet(
+            putStringArray(
                 Config.KEY_KEEP,
-                prefs.getStringSet(Config.KEY_KEEP, emptySet()).orEmpty().toSet(),
+                prefs.getStringSet(Config.KEY_KEEP, emptySet()).orEmpty().toTypedArray(),
             )
-            putStringSet(
+            putStringArray(
                 Config.KEY_KILL,
-                prefs.getStringSet(Config.KEY_KILL, emptySet()).orEmpty().toSet(),
+                prefs.getStringSet(Config.KEY_KILL, emptySet()).orEmpty().toTypedArray(),
             )
         }
     }
@@ -74,5 +74,8 @@ class ConfigProvider : ContentProvider() {
 
     private companion object {
         const val TAG = "SwipeClean"
+
+        /** `android.os.Process.SYSTEM_UID`（该常量在 SDK 里是系统 API，不引用）。 */
+        const val SYSTEM_UID = 1000
     }
 }

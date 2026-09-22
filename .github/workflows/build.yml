@@ -40,30 +40,6 @@ jobs:
           printf '%s' "$KEYSTORE_B64" | base64 -d > keystore/release.jks
           echo "KEYSTORE_PATH=$PWD/keystore/release.jks" >> "$GITHUB_ENV"
 
-      - name: Probe SDK (temporary)
-        run: |
-          SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-$HOME/Android/sdk}}"
-          JAR="$SDK/platforms/android-36/android.jar"
-          echo "=== BaseBundle full ==="
-          javap -cp "$JAR" android.os.BaseBundle
-          echo "=== Bundle string members ==="
-          javap -cp "$JAR" android.os.Bundle | grep -iE "string" || true
-          echo "=== control: SharedPreferences.getStringSet ==="
-          javap -cp "$JAR" android.content.SharedPreferences | grep -i stringset || true
-          echo "=== Process ==="
-          javap -cp "$JAR" android.os.Process | grep -iE "myuid|userhandle" || true
-          echo "=== UserManager ==="
-          javap -cp "$JAR" android.os.UserManager | grep -iE "profile" || true
-          echo "=== LauncherApps ==="
-          javap -cp "$JAR" android.content.pm.LauncherApps || true
-          echo "=== Context.getUser ==="
-          javap -cp "$JAR" android.content.Context | grep -i "user" || true
-          echo "=== StringSet availability per platform ==="
-          for P in 34 35 36 36.1; do
-            printf "android-%s: " "$P"
-            javap -cp "$SDK/platforms/android-$P/android.jar" android.os.Bundle 2>/dev/null | grep -ci stringset
-          done
-
       - name: Assemble release
         env:
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}

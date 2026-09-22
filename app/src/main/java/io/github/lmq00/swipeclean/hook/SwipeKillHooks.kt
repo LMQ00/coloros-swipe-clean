@@ -1,7 +1,6 @@
 package io.github.lmq00.swipeclean.hook
 
 import android.content.pm.ApplicationInfo
-import android.os.UserHandle
 import android.util.Log
 import io.github.libxposed.api.XposedInterface
 import io.github.libxposed.api.XposedModule
@@ -39,6 +38,9 @@ internal object SwipeKillHooks {
 
     private const val FILTER_SKIP = 1
     private const val FILTER_FORCE_KILL = 3
+
+    /** `UserHandle.PER_USER_RANGE`：uid 里 user 部分的步长（uid = userId * 100000 + appId）。 */
+    private const val PER_USER_RANGE = 100_000
 
     private val TARGET_CLASSES = listOf(
         "com.android.server.wm.ActivityTaskSupervisorExtImpl",
@@ -126,7 +128,7 @@ internal object SwipeKillHooks {
 
     /**
      * `WindowProcessController.mUserId`（实测字段，`WindowProcessController.java:122`）；
-     * 取不到时回退 `mInfo.uid` 经 `UserHandle.getUserId()`，再取不到按 0 处理。
+     * 取不到时回退 `mInfo.uid` 换算（`uid / PER_USER_RANGE`），再取不到按 0 处理。
      */
     private fun userIdOf(proc: Any?): Int {
         if (proc == null) return 0
@@ -138,6 +140,7 @@ internal object SwipeKillHooks {
         }.getOrNull()
         if (direct != null) return direct
         val uid = infoOf(proc)?.uid ?: return 0
-        return UserHandle.getUserId(uid)
+        // UserHandle.getUserId(uid) 是系统 API，编译期不可见；等价于 uid / PER_USER_RANGE。
+        return uid / PER_USER_RANGE
     }
 }
