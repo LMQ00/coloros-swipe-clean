@@ -111,7 +111,7 @@ class AppListAdapter(
 
             icon.tag = entry.key
             icon.setImageDrawable(placeholder)
-            IconCache.load(itemView.context, entry.packageName) { drawable ->
+            IconCache.load(itemView.context, entry.packageName, entry.userId) { drawable ->
                 // 行可能已被回收给别的应用，落图前再确认一次。
                 if (icon.tag == entry.key) icon.setImageDrawable(drawable)
             }

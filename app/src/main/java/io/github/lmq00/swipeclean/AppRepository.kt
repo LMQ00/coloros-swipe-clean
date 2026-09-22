@@ -8,6 +8,7 @@ import android.graphics.drawable.Drawable
 import android.os.Handler
 import android.os.Looper
 import android.os.Process
+import android.os.UserHandle
 import android.util.Log
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
@@ -45,6 +46,12 @@ object AppRepository {
     private const val PER_USER_RANGE = 100_000
 
     /**
+     * 分身 userId → `UserHandle`。只能用 `LauncherApps#getProfiles()` 给的实例，
+     * 因为 `UserHandle.of(int)` / `getUserId(int)` 都不是公开 API（见 Config.MODULE_PACKAGE 注释）。
+     */
+    private val handles = ConcurrentHashMap<Int, UserHandle>()
+
+    /**
      * 枚举当前 user 所属 profile group 内除本体外的 user，以及各 user 下已安装的应用。
      *
      * 依据（设备实测 + 框架代码）：
@@ -68,6 +75,7 @@ object AppRepository {
             return DualApps(emptyList(), emptyMap())
         }
         val packages = LinkedHashMap<Int, Set<String>>()
+        val found = LinkedHashMap<Int, UserHandle>()
         for (profile in profiles) {
             val apps = runCatching {
                 launcherApps.getActivityList(null, profile).map { it.applicationInfo }
@@ -77,10 +85,38 @@ object AppRepository {
             val userId = apps.first().uid / PER_USER_RANGE
             if (userId == self) continue
             packages[userId] = apps.map { it.packageName }.toSet()
+            found[userId] = profile
         }
+        handles.putAll(found)
         val userIds = packages.keys.sorted()
         Log.i(TAG, "dual users=$userIds packages=${packages.mapValues { it.value.size }}")
         return DualApps(userIds, packages)
+    }
+
+    /**
+     * 一行的图标。
+     *
+     * 本体走 `PackageManager`；分身走 `LauncherApps#getActivityList(pkg, user)` 得到的
+     * `LauncherActivityInfo#getBadgedIcon()`——这是公开 API（API 21+），文档即
+     * 「带该 user 角标的图标」，ColorOS 在这里画的就是 launcher 里看到的分身数字角标。
+     * 序号由 ROM 决定，模块不自行编号。
+     *
+     * 取不到（该包在目标 user 下没有 launcher 入口）时退回本体的图标。
+     */
+    fun iconOf(context: Context, packageName: String, userId: Int): Drawable? {
+        if (userId != 0) {
+            val handle = handles[userId]
+            val launcherApps = context.getSystemService(LauncherApps::class.java)
+            if (handle != null && launcherApps != null) {
+                val density = context.resources.displayMetrics.densityDpi
+                runCatching {
+                    launcherApps.getActivityList(packageName, handle)
+                        .firstOrNull()
+                        ?.getBadgedIcon(density)
+                }.getOrNull()?.let { return it }
+            }
+        }
+        return runCatching { context.packageManager.getApplicationIcon(packageName) }.getOrNull()
     }
 
     /**
@@ -117,16 +153,17 @@ object IconCache {
     private val pool = Executors.newFixedThreadPool(4)
     private val main = Handler(Looper.getMainLooper())
 
-    fun load(context: Context, packageName: String, onLoaded: (Drawable) -> Unit) {
-        cache[packageName]?.let {
+    /** 缓存键按 `<pkg>#<userId>` 区分：分身行的图标带角标，与本体不同。 */
+    fun load(context: Context, packageName: String, userId: Int, onLoaded: (Drawable) -> Unit) {
+        val key = Config.key(packageName, userId)
+        cache[key]?.let {
             onLoaded(it)
             return
         }
         val appContext = context.applicationContext
         pool.execute {
-            val icon = runCatching { appContext.packageManager.getApplicationIcon(packageName) }
-                .getOrNull() ?: return@execute
-            cache.putIfAbsent(packageName, icon)
+            val icon = AppRepository.iconOf(appContext, packageName, userId) ?: return@execute
+            cache.putIfAbsent(key, icon)
             main.post { onLoaded(icon) }
         }
     }
