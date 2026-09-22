@@ -15,6 +15,6 @@
     <string name="select_none">取消全选</string>
     <string name="select_exit">退出批量选择</string>
     <string name="batch_applied">已把 %1$d 个应用设为「%2$s」</string>
-    <!-- 分身子项副标题：包名 · #userId -->
+    <!-- 分身标识：用在列表行标题与设置面板标题，如「拼多多 · #998」 -->
     <string name="dual_suffix">%1$s · #%2$d</string>
 </resources>

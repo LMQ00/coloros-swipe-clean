@@ -67,12 +67,14 @@ class AppListAdapter(
         private val indentPx = (itemView.resources.displayMetrics.density * 32).toInt()
 
         fun bind(entry: AppEntry, current: Int, selecting: Boolean, checked: Boolean) {
-            label.text = entry.label
-            pkg.text = if (entry.userId == 0) {
-                entry.packageName
+            // 分身行的 userId 放在标题行：副标题是包名，`ellipsize=end` 会把 `· #998` 截掉，
+            // 放在副标题里等于看不见，列表里就分不清哪行是哪个分身。
+            label.text = if (entry.userId == 0) {
+                entry.label
             } else {
-                itemView.context.getString(R.string.dual_suffix, entry.packageName, entry.userId)
+                itemView.context.getString(R.string.dual_suffix, entry.label, entry.userId)
             }
+            pkg.text = entry.packageName
             itemView.setPaddingRelative(
                 basePaddingStart + if (entry.userId == 0) 0 else indentPx,
                 itemView.paddingTop,
