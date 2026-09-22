@@ -21,22 +21,22 @@ ColorOS / realme UI 的「划卡（recents swipe）杀不杀」白名单 LSPosed
 
 ## 当前状态
 
-已完成并实机验证（2026-09-22）：
+已完成并实机验证：
 
 - 「划卡不杀」：`com.omarea.vtools` 划卡后卡片消失、进程保留
 - 「划卡必杀」：`com.xunmeng.pinduoduo` 划卡瞬间全部进程结束，100 秒内无自启
-- 4 个 Hook 点全部命中
-- **分身**：拼多多两个分身（user 998 / 999）划卡时进程被精确结束，
-  `am_kill` 的 userId 分别标记 998 / 999，未互相误伤；本体同样精确
-
-待实施（方案已定，代码未改）：
-
-- 配置通道从 LSPosed remote prefs 改为 App ContentProvider + 广播
-- 名单加入 userId 维度，支持分身单独设置
-- 两项**合并实施**（都要改 `Config.kt` / `ConfigBridge.kt` / UI / 通道格式）
+- **配置通道**（2026-09-23）：App `ConfigProvider` + 配置广播。实测软重启后
+  `config bridge ready (attempt=13)` + `config loaded: …`，**未打开 App 即自动恢复**；
+  UI 改配置 1 秒内生效；拉取只拉起 App 进程，无界面、无通知
+- **分身独立设置**（2026-09-23）：名单元素 `<pkg>#<userId>`，UI 在本体条目下展开分身子项。
+  实测本体=必杀、998/999=不杀：划本体卡 `am_kill` 首字段 `0`、3 个进程全灭；
+  `u998_a367` / `u999_a367` 各 3 进程存活，互不误伤
+- **5 个 Hook 点**全部命中：4 个判定点（框架 ×2、athena ×2）+ 1 个配置通道用
+  （放行本模块自身 provider 冷启动）
+- 旧名单（纯包名）自动迁移为 `<pkg>#0` + 各实际分身 userId
 
 未覆盖：系统应用分支（`I0()`）、最近任务锁定的卡片、
-**同一 userId 下**同包多任务（athena `J0` 跳过）。
+**同一 userId 下**同包多任务（athena `J0` 跳过）、无 launcher 入口的分身应用不列出。
 
 ## Non-negotiables
 
@@ -44,6 +44,8 @@ ColorOS / realme UI 的「划卡（recents swipe）杀不杀」白名单 LSPosed
 | --- | --- |
 | 必杀名单的杀进程路径**不改**：走 athena `utils.p.b` force-stop（Hook 4）。已实测有效；换成模块侧直调 `forceStopPackageAsUser` 属未验证路径，收益仅鲁棒性。 | 代码 |
 | 配置通道**唯一**：App ContentProvider（`call("get")`）+ 配置广播。不得再引入 LSPosed `getRemotePreferences` / `XposedServiceHelper`。 | 代码 |
+| 配置拉取**必须**放行本模块自身 provider 冷启动（`AppStartupHooks`，Hook 5）；该 Hook **只准**对本模块包名生效，不得放宽其它应用。 | 代码 |
+| 配置拉取**必须**带启动期重试：`onSystemServerStarting` 早于 AMS 就绪，注册接收器与拉取 provider 都会 NPE（实测）。 | 代码 |
 | 配置读取失败**必须**降级并打日志：沿用上次成功缓存，无缓存则空名单（全走系统默认）。禁止静默失败。 | 代码 |
 | ContentProvider 与广播接收端**必须**校验来源 uid（`SYSTEM_UID` / 模块 App uid）。 | 代码 |
 | 名单 key **必须**含 userId（`<pkg>#<userId>`），**不得硬编码 999** —— 分身 user 实测有 998、999 多个值。 | 代码 |
@@ -65,7 +67,7 @@ ColorOS / realme UI 的「划卡（recents swipe）杀不杀」白名单 LSPosed
 | 语言 | Kotlin 2.2.21 |
 | 构建 | AGP 8.10.1 / Gradle 8.13（wrapper）/ JDK 17 |
 | SDK | `compileSdk 36`、`targetSdk 35`、`minSdk 26` |
-| 框架 | libxposed 现代 API（`compileOnly io.github.libxposed:api:101.0.1`）；旧配置通道依赖的 `io.github.libxposed:service` **待移除** |
+| 框架 | libxposed 现代 API（`compileOnly io.github.libxposed:api:101.0.1`）；`io.github.libxposed:service` 已随旧配置通道移除 |
 | UI | Material 3（`com.google.android.material:material:1.12.0`）+ DynamicColors |
 | 签名 | 密钥**不入库**，存于 GitHub Secrets；本地/无密钥时自动退回 debug 签名 |
 | CI | `.github/workflows/build.yml`，产物 artifact 名 `swipe-clean-release` |
@@ -79,8 +81,11 @@ Kotlin 必须 ≥ 2.2，否则在该 classpath 下会触发 FIR 内部崩溃（`
 - **CI 触发**：push 到 `main`，但 `**.md` 与 `docs/**` 的纯文档改动**不触发编译**。
 - **改 Hook 后必须重启**：`su -c 'setprop ctl.restart zygote'`（约 1 分钟）让新代码注入
   system_server；只改 UI 不需要重启。
-- **重装模块 APK 后**：当前配置通道会失效（LSPosed 每 uid 每轮开机只下发一次 binder），
-  表现为「UI 里改有反馈、实际行为不变」，需完整重启设备。改造为新通道后此限制消失。
+- **重装模块 APK 后**：只需核对 LSPosed 记录的 `apk_path` 与实际一致（实测会自动跟上）；
+  配置通道不受影响，**不需要**重启设备。
+- **不要在编译期使用 `Bundle#putStringSet/getStringSet` 或 `UserHandle` 的
+  `of/getUserId/myUserId/getIdentifier`**：这些不是公开 API，CI 侧 `android.jar` 里不存在
+  （`javap` 实测）。用 `putStringArray/getStringArray` 与 `uid / PER_USER_RANGE` 替代。
 - **分身测试样本**：拼多多 `com.xunmeng.pinduoduo`，user 998 / 999 各一个分身，
   uid 分别为 `99810367` / `99910367`（本体 `10367`）。
 - 日志位置、配置生效验证方法、分身验证方法、取回 CI 产物与安装步骤，见 `docs/development.md`。

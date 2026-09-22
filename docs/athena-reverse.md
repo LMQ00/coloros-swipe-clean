@@ -244,7 +244,14 @@ com.oplus.athena.systemservice.utils.p.b(ctx, pkg, userId, reason, type, a, b)
 由 `e1` 末尾的 `E0()`（`v.java:121-125` -> `F0` -> `utils.p.j` -> `z0.l.n` = `removeTask`）统一移除。
 实测确认卡片照常消失、进程存活。
 
-## 6. 模块 ↔ 框架的配置通道
+## 6. 模块 ↔ 框架的配置通道（历史，已被取代）
+
+> **2026-09-23 起本模块不再使用该通道。** 当前实现（App `ConfigProvider` + 配置广播 +
+> 第 5 个 Hook 放行自身 provider 冷启动）见 [`architecture.md`](architecture.md)。
+> 本节保留，用于理解旧通道的失效模式，以及「为什么必须换」。
+>
+> 代码侧已全部删除：`io.github.libxposed:service` 依赖、`XposedServiceHelper`、
+> `XposedProvider`、`getRemotePreferences`。
 
 Hook 侧 `XposedInterface#getRemotePreferences(group)` 读的是**框架侧存储**（LSPosed 数据库
 `modules_config.db` 的 `module_configs` 表），不是模块 App 自己的 SharedPreferences。
@@ -281,8 +288,10 @@ Hook 侧 `XposedInterface#getRemotePreferences(group)` 读的是**框架侧存�
   > 读 `modules_config.db` 验证配置时**必须连 `-wal` 一起复制**，否则读到旧快照，
   > 会得出「配置为空」的错误结论。详见 [`development.md`](development.md)。
 
-该通道的失效模式已确定要消除，改造方案（App ContentProvider + 广播）见
-[`architecture.md`](architecture.md)。
+该通道的失效模式已于 2026-09-23 消除：改为 App `ContentProvider`（Hook 主动
+`contentResolver.call("get")`）+ 配置变更广播，配置的唯一真相来源是 App 的 SharedPreferences。
+实现与实测踩到的两个坑（AMS 未就绪、ColorOS 拦 provider 冷启动）见
+[`architecture.md`](architecture.md)「配置通道」。
 
 ## 7. 失效风险
 

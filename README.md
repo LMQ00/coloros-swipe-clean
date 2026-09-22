@@ -16,8 +16,10 @@ ColorOS / realme UI 上自由控制「最近任务划卡能否杀死 App」的 L
 **应用分身（多开）**：分身是独立的系统 user，与本体**包名相同、uid 不同**
 （如拼多多本体 `10367`、分身 `99810367`）。
 
-> 当前版本：分身与本体**共用一条设置**（给本体设「必杀」，分身也会被必杀）。
-> 「本体与分身各自独立设置」已定方案、待实施，届时列表里本体条目下会展开分身子项。
+列表里本体条目下会展开出该应用的分身子项，标题为 `拼多多 · #998` / `拼多多 · #999`，
+**本体与每个分身各自独立设置**：给本体设「必杀」不影响分身，反之亦然。
+
+> 分身枚举走 `LauncherApps`，只覆盖带桌面入口的应用；没有桌面图标的分身应用不会列出。
 
 ## 使用
 
@@ -57,6 +59,10 @@ force-stop（`utils.p.b`），与系统清理走同一条路。
 `G0` 的闸门（通话中 `Z0`、同包多任务 `J0`）都同时比较 `pkgName` 与 `userId`，
 因此本体与各分身互不影响。
 
+模块另有一处与杀不杀无关的 Hook：放行**本模块自己**的 provider 冷启动
+（`OplusAppStartupManager#shouldPreventStartProvider`），否则 ColorOS 会拦掉配置拉取。
+只对本模块包名生效，不改变其它应用的启动策略。
+
 细节、返回值语义与出处见 [`docs/athena-reverse.md`](docs/athena-reverse.md)，
 模块结构与配置通道见 [`docs/architecture.md`](docs/architecture.md)。
 
@@ -66,14 +72,11 @@ force-stop（`utils.p.b`），与系统清理走同一条路。
 2. LSPosed 中启用模块。作用域会显示全部应用，其中 **系统框架** 由 `scope.list` 预勾选为推荐项。
    本模块的 Hook 全在 system_server（进程名 `system`），勾选其它应用不会生效（也无害）。
 3. 重启设备。
-4. **打开一次 App**：配置通过 libxposed 服务通道写入框架侧，框架只在 App 进程启动时下发该通道。
-   之后每次改动名单都会实时推送。
-5. **每次重装模块 APK 后需完整重启设备**：重装不会重新下发该通道，配置改动只写进本地，
-   实际行为不变（表现为「UI 里改有反馈、划卡没变化」）。完整重启后打开一次 App 即恢复。
-   软重启 zygote 无效。
+4. 打开 App 设置名单即可。**改动即时生效，无需重启**；重装模块 APK 后也不需要重启设备。
 
-> 第 4、5 步的限制来自当前使用的 libxposed 服务通道，已定方案改为 App ContentProvider +
-> 广播后，这两步都不再需要。
+> 配置由 Hook 侧（system_server）主动向 App 的 `ContentProvider` 拉取，配合配置变更广播：
+> 系统启动时自动拉一次，之后每次改配置即时推送。拉取只会启动 App 进程，
+> 不弹界面、不发通知。
 
 ## 构建
 
@@ -105,7 +108,8 @@ CI：推送到 `main` 后由 GitHub Actions 编译，产物在 Actions 的 Artif
 - **同一 userId 下同包多任务**：某应用在**同一个 user** 里有多张卡片时，划掉其中一张不会杀进程——
   athena 的 `J0()` 检测到该包还有其它任务会跳过整段处理。本体与分身是不同 user，
   **不受此限制影响**。属系统既有行为，模块不介入。
-- **分身当前无法单独设置**（见「行为」一节），本体与分身共用一条设置。
+- **没有桌面入口的分身应用不会列出**：分身枚举走 `LauncherApps`，只覆盖带
+  `MAIN`/`LAUNCHER` 入口的应用。
 - 「划卡不杀」名单同时会让该应用不被 athena 的后台内存清理回收（两者共用同一判定入口）。
 
 ## 排查
@@ -114,12 +118,14 @@ CI：推送到 `main` 后由 GitHub Actions 编译，产物在 Actions 的 Artif
 
 1. LSPosed 里模块是否启用、作用域里 **系统框架** 是否勾选（必须是进程名 `system`）。
 2. 日志：`/data/adb/lspd/log/modules_*.log` 里搜 `SwipeClean`，正常应有
-   `swipe hooks installed: 2` / `athena hooks installed: 1` / `athena swipe hooks installed: 1`。
+   `swipe hooks installed: 2` / `app startup hooks installed: 1` / `athena hooks installed: 1` /
+   `athena swipe hooks installed: 1`，随后是 `config bridge ready (attempt=N)` 与 `config loaded: …`。
 3. 若出现 `swipe-up keep:` / `athena swipe keep:` 但进程仍死，属未覆盖的路径，请附日志反馈。
-4. **改了配置但不生效**（最常见）：配置要经 libxposed 服务通道写到框架侧，而该通道只在
-   模块 App 进程启动时由框架下发，且每个 uid 每轮开机只发一次。**每次重装模块 APK 后通道都会
-   失效**，表现为 UI 里改有反馈、实际行为不变。判定：`su -c 'logcat -d -s SwipeClean'` 里
-   没有 `xposed service bound:` 输出。**必须完整重启设备**（软重启 zygote 无效），
-   重启后打开一次 App 即可自动把名单同步过去。详见 [`docs/development.md`](docs/development.md)。
+4. **改了配置但不生效**：先看模块日志里有没有 `config loaded: keep=[…] kill=[…]`。
+   - **有且内容正确** → 配置已到 Hook 侧，问题在判定链（看下一条）。
+   - **没有** → 配置没拉到。正常启动应依次出现 `app startup hooks installed: 1` 与
+     `config bridge ready (attempt=N)`；若出现 `config bridge not ready after N attempts`，
+     说明 ColorOS 拦掉了 provider 冷启动（`logcat` 里搜 `OplusAppStartupManager`），
+     见 [`docs/architecture.md`](docs/architecture.md) 的「第 5 个 Hook」。
 
 开发与接手说明见 [`AGENTS.md`](AGENTS.md)。

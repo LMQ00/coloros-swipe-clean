@@ -35,23 +35,23 @@ CI 解码到 `KEYSTORE_PATH` 注入；签名固定 → 新构建可直接覆盖�
 su -c 'setprop ctl.restart zygote'   # 约 1 分钟
 ```
 
-只改 UI 不需要重启。软重启足以让新代码注入 system_server（但**不足以**恢复配置通道，见下）。
+只改 UI 不需要重启。软重启足以让新代码注入 system_server（约 1 分钟）。
+配置由 Hook 在 system_server 启动时自行拉取，重启后无需打开 App 即可恢复。
 
-### 重装 APK 后的两件事
+### 重装 APK 后
 
-1. **`apk_path` 可能失效**（安装路径含随机目录）。LSPosed 配置库里记录的路径与实际不符时，
-   手动同步：
+**`apk_path` 可能失效**（安装路径含随机目录）。LSPosed 配置库里记录的路径与实际不符时，
+手动同步：
 
-   ```bash
-   su -c 'cp /data/adb/lspd/config/modules_config.db* /data/local/tmp/'
-   # 用 python sqlite3 打开（会自动合并 -wal），更新 modules.apk_path，再写回并删除 -wal/-shm
-   ```
+```bash
+su -c 'cp /data/adb/lspd/config/modules_config.db* /data/local/tmp/'
+# 用 python sqlite3 打开（会自动合并 -wal），更新 modules.apk_path，再写回并删除 -wal/-shm
+```
 
-2. **旧配置通道会失效**（改造为 ContentProvider + 广播后此限制消失）：LSPosed 每 uid
-   每轮开机只下发一次 binder，重装后 uid 不变 → 不再下发 → App 写入只落本地。
-   表现为 UI 里改有反馈、实际行为不变。判定：`su -c 'logcat -d -s SwipeClean'` 若无
-   `xposed service bound:` 输出，即通道断了。
-   **恢复方式：完整重启设备**（软重启 zygote 无效），重启后打开一次 App 即自动收敛。
+实测两次重装（2026-09-23）LSPosed 都自动跟上了新路径，未出现不一致；仍建议 `pm path` 核对一次。
+
+配置通道**不再需要**任何重装后处理：旧 LSPosed remote prefs 通道的「重装后需完整重启」
+限制已随 ContentProvider + 广播改造消失。
 
 ## 日志与验证
 
@@ -71,29 +71,55 @@ su -c 'grep -a SwipeClean /data/adb/lspd/log/modules_$(ls -t /data/adb/lspd/log 
 ```
 loaded: process=system, systemServer=true, api=102
 swipe hooks installed: 2
+app startup hooks installed: 1
+athena class not found: com.oplus.athena.common.parser.athena.FilterHelper   ← athena 尚未加载，预期
+config receiver register failed (retry pending)                              ← 首次尝试，AMS 未就绪，预期
+config pull failed                                                          ← 同上
 athena hooks installed: 1
 athena swipe hooks installed: 1
+allowed provider start for io.github.lmq00.swipeclean (vendor block overridden)
+config bridge ready (attempt=13)
+config loaded: keep=[…] kill=[…]
 ```
+
+- `config bridge ready (attempt=N)` 前的失败是**预期**的：`onSystemServerStarting` 早于 AMS 初始化，
+  注册接收器与拉取 provider 都会 NPE，`ConfigBridge` 以 1 秒间隔重试（上限 60 次）。
+- 若始终只有 `config bridge not ready after N attempts`，说明 ColorOS 拦掉了 provider 冷启动
+  （`logcat` 搜 `OplusAppStartupManager` 应能看到 `prevent start …`），
+  即「第 5 个 Hook」没挂上。
 
 ### 验证配置是否生效
 
-**必须连 `-wal` 一起读**：LSPosed 用 WAL 模式，只复制 `modules_config.db` 会读到旧快照，
-得到「配置为空」的错误结论。
+配置的唯一真相来源是模块 App 的 SharedPreferences：
 
 ```bash
-su -c 'cp /data/adb/lspd/config/modules_config.db* /data/data/com.termux/files/home/tmp/'
-python3 -c "
-import sqlite3
-c=sqlite3.connect('/data/data/com.termux/files/home/tmp/modules_config.db')
-for k,d in c.execute(\"select key_name,data from module_configs where group_name='config'\"):
-    print(k, d.hex())
-"
+su -c 'cat /data/data/io.github.lmq00.swipeclean/shared_prefs/config.xml'
 ```
 
-`keep` / `kill` 是 Java `HashSet` 序列化结果，尾部 `770c <capacity> 3f400000 <size>` 后跟
-`74 <len> <utf8>` 元素串。`size=0` 即空集。
+元素形如 `<pkg>#<userId>`，两个 `<set>` 即 keep / kill 名单。例：
 
-更快的判据：模块日志里出现 `config loaded: keep=[...] kill=[...]`，说明 Hook 已读到新名单。
+```xml
+<set name="keep">
+    <string>com.xunmeng.pinduoduo#999</string>
+    <string>com.termux#0</string>
+</set>
+<set name="kill">
+    <string>com.xunmeng.pinduoduo#0</string>
+</set>
+```
+
+更快的判据：模块日志里出现 `config loaded: keep=[…] kill=[…]`，说明 Hook 已读到当前名单
+（每次内容变化都会打一条）。改配置后应在 1 秒内看到新的一条。
+
+**改动是否即时生效**（不重启、不打开 UI）：
+
+```bash
+su -c 'am broadcast -a io.github.lmq00.swipeclean.CONFIG_CHANGED'
+# Hook 侧注册的接收器收到后立即重新拉取；随后模块日志出现新的 config loaded
+```
+
+> 旧通道时代需要连 `-wal` 一起读 LSPosed 的 `modules_config.db`——那套已废弃。
+> `module_configs` 表里的 `keep`/`kill` 只是历史残留，模块不再读取。
 
 ### 验证划卡效果
 
@@ -153,6 +179,16 @@ su -c 'logcat -b events -d' | grep -a -E "am_kill|am_proc_start" | grep -a <pkg>
 - 同包名的其它 user **不受影响**：`G0` 的 `J0` 闸门同时比较 `pkgName` 与 `userId`
   （`v.java:245`），`Z0` 也带 uid
 
+**模块侧枚举**（已实现）：`AppRepository.loadDualApps()` 用 `LauncherApps.getProfiles()` +
+`getActivityList(null, user)`，userId 由 `ApplicationInfo.uid / 100000` 反推。
+打开 App 后其进程日志里应有：
+
+```
+dual users=[998, 999] packages={998=…, 999=…}
+```
+
+列表里本体条目下会展开出 `拼多多 · #998` / `拼多多 · #999` 子项，各自独立设置。
+
 **测试样本**：拼多多 `com.xunmeng.pinduoduo`，user 998 / 999 各一个分身
 （uid `99810367` / `99910367`），本体 uid `10367`。
 
@@ -161,12 +197,15 @@ su -c 'logcat -b events -d' | grep -a -E "am_kill|am_proc_start" | grep -a <pkg>
 模块没生效时按顺序检查：
 
 1. LSPosed 里模块是否启用、作用域里**系统框架**是否勾选（必须是进程名 `system`）。
-2. 模块日志里是否有 `swipe hooks installed: 2` / `athena hooks installed: 1` /
-   `athena swipe hooks installed: 1`。
-3. 模块日志里是否有 `config loaded:` 且名单正确——没有则配置没到 Hook 侧（见上「重装 APK 后的两件事」）。
+2. 模块日志里是否有 `swipe hooks installed: 2` / `app startup hooks installed: 1` /
+   `athena hooks installed: 1` / `athena swipe hooks installed: 1`。
+3. 模块日志里是否有 `config bridge ready (attempt=N)` 与 `config loaded:` 且名单正确——
+   只有 `config bridge not ready after N attempts` 说明配置没到 Hook 侧（ColorOS 拦了
+   provider 冷启动，见「第 5 个 Hook」）。
 4. 出现 `swipe-up keep:` / `athena swipe keep:` 但进程仍死，属未覆盖路径（见
    [`architecture.md`](architecture.md) 的已知限制），附日志反馈。
-5. **改了配置但不生效**：先确认不是配置通道失效（第 3 步），再确认划卡时该包在最近任务里
+5. **改了配置但不生效**：先确认不是配置通道问题（第 3 步），再确认划卡时该包在最近任务里
    是否只有一张卡（**同一 userId 下**同包多任务会被 athena 的 `J0` 跳过）。
-6. **分身场景**：确认 `am_kill` 首字段是期望的 userId；若本体设置影响了分身或反之，
-   说明名单 key 未带 userId（改造前的预期行为，见 [`architecture.md`](architecture.md)）。
+6. **分身场景**：确认命中日志里的 key 是期望的 `<pkg>#<userId>`（如
+   `athena swipe force kill: com.xunmeng.pinduoduo#0`），以及 `am_kill` 首字段是对应的 userId；
+   若本体设置影响了分身或反之，说明名单 key 未带 userId。

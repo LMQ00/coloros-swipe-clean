@@ -5,8 +5,8 @@
 ```
 app/src/main/java/io/github/lmq00/swipeclean/
 ├── Config.kt              共享常量与配置模型（App 与 Hook 共用）
-├── ConfigStore.kt         配置读写（本地 + 同步到 Hook 侧）
-├── ConfigProvider.kt      配置读取入口（ContentProvider，待实施）
+├── ConfigStore.kt         配置读写（本地落盘 + 发配置广播）
+├── ConfigProvider.kt      配置读取入口（ContentProvider，Hook 跨进程 call("get")）
 ├── AppRepository.kt       应用列表加载（含分身）
 ├── AppListAdapter.kt      列表、展开与批量选择
 ├── MainActivity.kt        UI
@@ -15,7 +15,8 @@ app/src/main/java/io/github/lmq00/swipeclean/
     ├── ModuleMain.kt      libxposed 入口（见 META-INF/xposed/java_init.list）
     ├── ConfigBridge.kt    Hook 侧配置读取与缓存
     ├── SwipeKillHooks.kt  框架侧 Hook（路径 A）
-    └── AthenaHooks.kt     athena 侧 Hook（路径 B）
+    ├── AthenaHooks.kt     athena 侧 Hook（路径 B）
+    └── AppStartupHooks.kt 放行本模块自身 provider 冷启动（配置通道的前提）
 ```
 
 模块以 `com.oplus.athena` 的 `systemservice`（`android:process="system"`）与 system_server
@@ -49,6 +50,45 @@ com.oplus.athena.systemservice.utils.p.b(ctx, pkg, userId, reason, type, a, b)
 
 放在后台线程调用，避免在划卡流程里同步重入。跳过 `D0` 不影响卡片移除：
 任务 id 在 `G0` 里就已登记进 `f1446s`，由 `e1` 末尾的 `E0()` 统一移除。
+
+### 第 5 个 Hook：放行自身 provider 冷启动（配置通道的前提）
+
+`com.android.server.am.OplusAppStartupManager#shouldPreventStartProvider(ProcessRecord, ContentProviderRecord, ApplicationInfo, String, int)`
+（`oplus-services.jar`，`@Override // IOplusAppStartupManager`）。
+
+配置通道靠 Hook 主动 `contentResolver.call()` 拉取，而 ColorOS 的启动管控会拦掉第三方 App 的
+provider 场景冷启动——**即使调用方是 system_server**：
+
+```
+W/OplusAppStartupManager: prevent start io.github.lmq00.swipeclean,
+  cmp ComponentInfo{…/ConfigProvider} by contentprovider android callingUid 1000, scenePriority = 0
+E/ActivityThread: Failed to find provider info for io.github.lmq00.swipeclean.config
+```
+
+判定链（`OplusAppStartupManager.java`，jadx 自 `/system/framework/oplus-services.jar`）：
+
+```
+AMS → shouldPreventStartProvider(proc, providerRecord, appInfo, callingPackage, callingUid)  // 2062 ← 挂这里
+       -> validStartupWithRestrict(providerRecord, null, 0, null, "provider")                 // 2068
+       -> handleStartProvider(providerRecord, proc)                                           // 2070
+            （callerApp.uid <= 10000 时直接放行）
+       -> !isAllowStartFromProvider(proc, providerRecord, appInfo, …)                          // 2080
+            - isRootOrShell(callingUid)                                                       // 2261（uid 1000 不算）
+            - isDefaultAllowStart(appInfo) || isInLruProcessesLocked(appInfo.uid)             // 2325
+            - inProtectWhiteList(pkg)                                                         // 2335
+            - isAllowAssociateByList(64, …)                                                   // 2352
+            - 全不满足 → 2380 打上面那条日志并 return false（= 不允许启动）
+```
+
+本 Hook 的行为：**先执行原方法，仅当原结果为 true（要拦）且目标包名就是本模块自己时返回 false**。
+
+- 目标包名取自 `ApplicationInfo#packageName`（即厂商日志里的 calledPackageName），
+  取不到回退 `ContentProviderRecord#getComponentName()`。
+- 包名不匹配时一律 `proceed()`，其它应用的启动策略完全不受影响。
+- ROM 将来自己放行时（例如用户手动把本 App 加进自启动白名单），本 Hook 自动退化为空操作。
+- 实际覆盖厂商拦截时打 `allowed provider start for io.github.lmq00.swipeclean (vendor block overridden)`。
+
+`OplusAppStartupManagerExtImpl` 只做配置场景转发（`notifyConfigExSceneUpdate`），没有 provider 闸门。
 
 ### 实测结论（2026-09-22）
 
@@ -89,7 +129,11 @@ com.oplus.athena.systemservice.utils.p.b(ctx, pkg, userId, reason, type, a, b)
 | Hook | userId 来源 | 说明 |
 | --- | --- | --- |
 | 3 / 4 | `ProcDetailInfo.userId` | `public int` 字段，与 `uid`、`realUid` 并列 |
-| 1 / 2 | `WindowProcessController.mInfo.uid` → `UserHandle.getUserId(uid)` | `ApplicationInfo.uid` 是 public 字段 |
+| 1 / 2 | `WindowProcessController.mUserId` | 实测字段（`WindowProcessController.java:122`）；取不到回退 `mInfo.uid / PER_USER_RANGE` |
+
+`UserHandle` 的 `of()` / `getUserId()` / `myUserId()` / `getIdentifier()` **都不是公开 API**
+（CI 侧 `android-36/android.jar` 用 `javap` 实测确认，对照 `SharedPreferences#getStringSet` 在），
+因此 userId 一律用 `uid / 100000`（`PER_USER_RANGE`）换算，不引用 `UserHandle` 的访问器。
 
 ### `G0` 的闸门是 user 感知的
 
@@ -108,26 +152,39 @@ if (procDetailInfo.pkgName.equals(intent.getComponent().getPackageName())
 
 实测印证：998 与 999 同时有任务时，划掉 998 的卡只杀 998，999 完好。
 
-### 现状行为（改造前）
+### 现状行为（已实施）
 
-名单是包级 `StringSet` → 一条记录同时命中本体与所有分身。实测划任一张卡，
-`am_kill` 的 userId 与所划的 user 一致（998 / 999 / 0 均精确），但**设置无法区分**。
+名单元素为 `<pkg>#<userId>`，本体与各分身各自独立设置。实测（2026-09-23，配置为
+本体=必杀、998/999=不杀）：
 
-### UI 枚举分身
+- 划本体卡 → `am_kill [0,…]` ×3（`com.xunmeng.pinduoduo` / `:titan` / `:sandboxed_process0`）
+- 划 998 卡 → `athena swipe keep: com.xunmeng.pinduoduo#998`，`u998_a367` 三个进程存活
+- 划 999 卡 → 同上，`u999_a367` 存活
 
-模块 App 是普通应用（无特权），但分身 user 与当前 user **同 profile group**（`parentId=0`），
-Android 的 `filterAppAccess` 对同 profile group 的跨 user 查询**不过滤**。实测
-（Termux，`uid=10366 u0_a366`，`untrusted_app_27`，**无 su**）：
+### UI 枚举分身（已实现）
+
+`AppRepository.loadDualApps()`：
+
+1. `LauncherApps#getProfiles()` → 当前 user 所属 profile group 的全部 user
+   （`UserManagerService.getProfileIds(自己, true)`，只在 `userId != callingUserId` 时校验权限）。
+2. 对每个 profile 调 `LauncherApps#getActivityList(null, profile)` → 该 user 下带 launcher 入口的应用。
+3. userId 由 `ApplicationInfo.uid / PER_USER_RANGE` 反推（`UserHandle` 的访问器非公开 API，见上）。
+4. 跳过当前 user 自己（`Process.myUid() / PER_USER_RANGE`）。
+
+实测模块日志：`dual users=[998, 999] packages={998=…, 999=…}`。
+
+**局限**：只覆盖带 launcher 入口（`MAIN`/`LAUNCHER`）的应用；无入口的分身应用不会列出。
+
+依据（设备实测 + 框架代码）：分身 user 与当前 user **同 profile group**（`parentId=0`），
+`filterAppAccess` 对同 profile group 的跨 user 查询**不过滤**；
+`LauncherAppsService#getLauncherActivities` → `canAccessProfile` → `isProfileAccessible`
+对同 profileGroupId 的已启用 user 返回 true。Termux（`uid=10366 u0_a366`，**无 su**）实测：
 
 ```
 cmd package list packages -U --user 998  → package:com.xunmeng.pinduoduo uid:99810367
 ```
 
 uid 前缀 998 证明查询真的落在目标 user，不是回退到 0。
-
-候选 API：`LauncherApps`（public API，首选）→ 回退反射
-`PackageManager.getInstalledApplicationsAsUser`（`@SystemApi`，受 hidden API 限制影响）。
-**需真机代码验证**（`cmd` 是 native 进程，与 app 环境的 hidden API 限制不同）。
 
 ### 名单格式与迁移
 
@@ -139,96 +196,106 @@ uid 前缀 998 证明查询真的落在目标 user，不是回退到 0。
 
 ## 配置通道
 
-### 现状：LSPosed remote prefs（将被替换）
+### 实现：App ContentProvider + 广播
 
 ```
-App: XposedServiceHelper.registerListener → 框架下发 IXposedService binder
-     → service.getRemotePreferences("config").edit()...commit()
-Hook: module.getRemotePreferences("config")
-```
-
-数据落在 LSPosed 的 `modules_config.db` → `module_configs` 表，Hook 读的是**同一份**。
-App 本地另有 SharedPreferences 副本，靠 App 推送保持同步。
-
-**失效模式（已实锤）**：
-
-1. LSPosed 在模块 App 进程启动时调用其 `XposedProvider` 下发 binder，**每个 uid 每轮开机只下发一次**。
-2. 重装模块 APK 后 uid 不变，LSPosed 认为「已发过」，**不再下发**。
-3. `ConfigStore.push()` 首行 `val target = remote ?: return` —— `remote == null` 时静默返回，
-   本地写成功、框架侧永远不变，**无任何日志**。
-4. 结果：UI 里改配置有反馈，实际行为不变，直到完整重启设备。
-
-时间证据（2026-09-22）：
-
-```
-App config.xml            mtime = 20:43:58    ← 用户设置必杀
-modules_config.db-wal     mtime = 20:52:28    ← 框架侧才被写入（重启后 App 启动那一刻）
-```
-
-软重启 zygote **不足以恢复**，必须完整重启设备。
-
-### 目标：App ContentProvider + 广播
-
-```
-Hook 侧（system_server）:
-  system_server 启动 → ContentResolver.call(content://<pkg>.config, "get") 拉一次
-                      → 内存缓存
-  收到 CONFIG_CHANGED 广播（带完整名单）→ 直接更新缓存，不再回调 provider
-
 App 侧:
-  配置变更 / App 启动 → 写本地 SharedPreferences + sendBroadcast(CONFIG_CHANGED)
+  配置变更（UI）→ ConfigStore.setModes() → 写本地 SharedPreferences
+                                        → sendBroadcast(ACTION_CONFIG_CHANGED)
+Hook 侧（system_server）:
+  system_server 启动 → ConfigBridge.install()：取 systemContext、注册广播接收器、
+                       contentResolver.call(content://<pkg>.config, "get") 拉一次 → 内存缓存
+  收到广播        → 立即再拉一次（后台线程）
+  判定路径（2 秒 TTL 过期）→ 后台线程再拉一次，本次判定仍用当前缓存
 ```
 
-设计要点：
+- **单一真相来源**：App 的 SharedPreferences（`/data/data/io.github.lmq00.swipeclean/shared_prefs/config.xml`）。
+  Hook 侧只是内存缓存，不产生副本分叉。
+- **provider**：`ConfigProvider`，authority `io.github.lmq00.swipeclean.config`，`exported="true"`；
+  内部校验 `Binder.getCallingUid() == 1000`（非 1000 记日志并返回 null）。
+- **旧名单迁移**：`ConfigProvider.call` 首次被调用时若发现旧格式元素（不含 `#`），
+  展开为 `<pkg>#0` + 该包实际存在的分身 userId 后落盘；UI 侧 `load()` 也会做一次。
+- **降级**：拉取失败沿用上次成功缓存并打日志；从未成功过时判定路径做一次同步补拉
+  （按 `loadedAt` 限频），**绝不拿空名单静默判定**。
+- **广播接收器**：`RECEIVER_EXPORTED`（system_server 必须收得到）。任意应用都能触发一次
+  重新拉取，但不构成提权——拉取目标固定为本模块 App 的 provider，且 provider 只接受 uid 1000，
+  最坏结果是多一次拉取。因此不加签名权限。
 
-- **单一真相来源**：只有 App 的 SharedPreferences 一份，不存在副本分叉。
-- **避免循环**：广播携带完整名单，Hook 收到后直接用广播数据更新缓存，不回调 provider。
-  provider 仅在 system_server 启动时调用一次。
-- **后台启动无界面**：`ContentResolver.call()` 只启动 App 进程
-  （`Application.onCreate` → provider `onCreate`），不创建 Activity，无前台切换、无通知。
-- **降级**：拉取/广播失败沿用上次缓存；从未成功过则视为空名单（全走系统默认），
-  失败写模块日志。
-- **权限**：provider `exported="true"`（Hook 跨 uid 调用），内部校验
-  `Binder.getCallingUid() == Process.SYSTEM_UID`；广播接收端校验发送方 uid。
-- **取 Context**：Hook 侧用 `ActivityThread.currentActivityThread().getSystemContext()`
-  （`AthenaHooks.resolveForceStop` 已有同样用法）。
+### 实测踩到的两个坑（都已复现并修）
 
-### 改造实现路径
+**1. AMS 未就绪**：`onSystemServerStarting` 早于 AMS 初始化，此时 `ActivityThread#mgr`
+（IActivityManager）为 null，注册接收器与拉取 provider 都会 NPE：
 
-配置通道改造与分身改造**合并实施**（两者都改 `Config.kt` / `ConfigBridge.kt` / UI / 通道格式）。
+```
+config receiver register failed: NPE at ContextImpl.registerReceiverInternal
+  → IActivityManager.registerReceiverWithFeature on null
+config pull failed: NPE at ActivityThread.acquireProvider
+  → IActivityManager.getContentProvider on null
+```
 
-| 文件 | 改动 |
+实测时间线：本回调 22:51:03.958 失败，AMS 就绪约 22:51:04.3。
+→ `ConfigBridge.install()` 改为 1 秒间隔、上限 60 次的重试，直到「接收器注册成功 + 首次拉取成功」，
+成功打 `config bridge ready (attempt=N)`，失败打 `config bridge not ready …`（不静默）。
+
+**2. ColorOS 拦截 provider 冷启动**：见上「第 5 个 Hook」。没有它，拉取只在 App 进程恰好活着时
+才能成功，重启后到用户打开 App 之前名单恒为空——正是本次要消灭的失效模式。
+
+### 被排除的方案
+
+| 方案 | 为什么不行 |
 | --- | --- |
-| `ConfigProvider.kt` | **新增**。ContentProvider，authority `<applicationId>.config`，`call("get")` 返回 Bundle（keep/kill），校验 calling uid |
-| `Config.kt` | 移除旧通道专用的 `GROUP`；新增 authority / 广播 action / Bundle key；新增 `<pkg>#<userId>` 编解码；保留 `KEY_KEEP` / `KEY_KILL` |
-| `ConfigStore.kt` | 删除 `remote` / `attach` / `detach` / `push`；`setModes` 改为「写本地 + 发配置广播」；读取时做旧格式迁移 |
-| `SwipeCleanApp.kt` | 删除 `XposedServiceHelper.registerListener`；改为启动时发一次配置广播 |
-| `AndroidManifest.xml` | 声明 `ConfigProvider`（`exported="true"`） |
-| `build.gradle.kts` | 移除 `implementation("io.github.libxposed:service:101.0.0")` |
-| `hook/ConfigBridge.kt` | 重写：改用 `contentResolver.call()` 拉取 + 内存缓存 + 广播入口；按 `<pkg>#<userId>` 匹配 |
-| `hook/ModuleMain.kt` | `onSystemServerStarting` 中初始化 ConfigBridge（取 systemContext、注册接收器、首次拉取） |
-| `hook/SwipeKillHooks.kt` | 包名匹配改为 `<pkg>#<userId>`；userId 由 `mInfo.uid` 经 `UserHandle.getUserId()` 取得 |
-| `hook/AthenaHooks.kt` | 同上；userId 用已有的 `ProcDetailInfo.userId`；日志带 userId |
-| `AppRepository.kt` | 枚举分身 user 及其已安装应用（`LauncherApps` → 回退反射） |
-| `AppListAdapter.kt` / `MainActivity.kt` / `item_app.xml` | 本体条目下展开分身子项；每个子项独立设置 |
+| Hook 直接读 App 的 SharedPreferences 文件 | system_server（uid 1000）读不了 `/data/data/<pkg>/`（父目录 0700，无 `CAP_DAC_OVERRIDE`） |
+| 经 LSPosed 数据库中转 | `/data/adb` 是 `0700 root:root`，uid 1000 无法穿越 |
+| App 写公共目录供 Hook 读 | `/data/local/tmp` 是 `0771 shell:shell`，普通 App 只能穿过、不能建文件；`/sdcard` 受 FUSE 与分区隔离限制 |
+| 保留旧 LSPosed remote prefs 通道 | 见 [`athena-reverse.md`](athena-reverse.md) §6：每 uid 每轮开机只下发一次 binder，重装 APK 后静默失效 |
 
-移除 `service` 依赖后，其 manifest 合并的 `XposedProvider` 声明一并消失——
-这是「旧通道彻底移除」的预期结果。
+### 实施结果（2026-09-23）
 
-### 验收
+| 文件 | 最终形态 |
+| --- | --- |
+| `ConfigProvider.kt` | ContentProvider，authority `io.github.lmq00.swipeclean.config`，`call("get")` 返回 `Bundle`（keep/kill 以 **StringArray** 传递），校验 calling uid == 1000，首次调用时做旧名单迁移 |
+| `Config.kt` | `PREFS` / `MODULE_PACKAGE` / `AUTHORITY` / `METHOD_GET` / `ACTION_CONFIG_CHANGED` + `key(pkg, userId)` / `isLegacy()`；`ConfigStore` 删除 `remote` / `attach` / `detach` / `push`，新增 `needsMigration()` / `migrate()` / `notifyChanged()` |
+| `SwipeCleanApp.kt` | 只保留 `DynamicColors`（不再绑定 LSPosed 服务） |
+| `AndroidManifest.xml` | 声明 `ConfigProvider`（`exported="true"`）；`service` 依赖移除后旧 `XposedService` provider 一并消失 |
+| `build.gradle.kts` | 移除 `io.github.libxposed:service`；versionCode 3 / versionName 1.2 |
+| `hook/ConfigBridge.kt` | `contentResolver.call()` 拉取 + 2 秒 TTL 惰性刷新 + 广播即时刷新 + 启动期重试；按 `<pkg>#<userId>` 匹配 |
+| `hook/ModuleMain.kt` | `onSystemServerStarting` 中 `ConfigBridge.install()` 与 `AppStartupHooks.install()`；共享 `systemContext()` |
+| `hook/SwipeKillHooks.kt` | userId 取自 `mUserId`（回退 `uid / PER_USER_RANGE`）；判定与日志带 userId |
+| `hook/AthenaHooks.kt` | userId 用 `ProcDetailInfo.userId`；日志带 userId |
+| `hook/AppStartupHooks.kt` | **新增**，见「第 5 个 Hook」 |
+| `AppRepository.kt` | `AppEntry` 加 `userId` / `key`；新增 `loadDualApps()`；`load()` 为每个分身展开一行 |
+| `AppListAdapter.kt` / `MainActivity.kt` | 分身子项缩进显示，**userId 放在行标题**（`拼多多 · #998`）；选择与写入一律按 `entry.key` |
+
+> Bundle 用 `putStringArray` / `getStringArray` 而非 `putStringSet` / `getStringSet`：
+> 后两者不是公开 API，CI 编译期不可见（`javap` 实测）。
+> 行标题而非副标题放 userId：`item_app.xml` 的 `ellipsize=end` 会把副标题里的 `· #998` 截掉。
+
+### 验收结果（2026-09-23，实机）
 
 配置通道：
 
-1. 改配置后**立即生效**（不重启）
-2. **重装模块 APK 后仍生效**（旧通道正是在这里失效）
-3. 重启后名单**自动恢复**
-4. 拉取时**无感**：无界面、无通知
+| # | 项 | 结果 | 证据 |
+| --- | --- | --- | --- |
+| 1 | 改配置后立即生效 | ✅ | UI 里把 `#998` 改成「默认」→ 1 秒内模块日志 `config loaded: keep=[…#999,…] kill=[…#0]` |
+| 2 | 重装模块 APK 后仍生效 | ✅ | 重装 + 软重启后 `config bridge ready (attempt=13)`、`config loaded: …`，全程未打开 App |
+| 3 | 重启后名单自动恢复 | ✅（软重启） | 同上；完整重启未单独复验（机制相同，配置源在 `/data` 持久区） |
+| 4 | 拉取无感 | ✅ | 拉取后前台仍是用户应用，无 Activity、无通知；App 进程在后台被静默拉起 |
 
 分身：
 
-5. 本体设「必杀」、分身设「不杀」→ 划本体卡杀 uid 尾号 `0` 的进程，划分身卡进程保留
-6. 两个分身设不同模式 → 各自生效，互不影响
-7. 模块日志能直接看出命中的 userId（`athena swipe force kill: <pkg>#<userId>`）
+| # | 项 | 结果 | 证据 |
+| --- | --- | --- | --- |
+| 5 | 本体必杀 + 分身不杀 | ✅ | 划本体卡 → `am_kill [0,…]` ×3；`u998_a367` 三进程存活 |
+| 6 | 两个分身各自独立 | ✅ | `athena swipe keep: …#998` / `…#999`，两者均无 `am_kill` |
+| 7 | 日志带 userId | ✅ | `athena swipe force kill: com.xunmeng.pinduoduo#0`、`…keep: …#998` |
+| 8 | UI 展开分身子项 | ✅ | 列表 3 行：`拼多多`（必杀）/ `拼多多 · #998`（不杀）/ `拼多多 · #999`（不杀），各自独立 |
+
+旧名单迁移（`<pkg>` → `<pkg>#0` + 各实际分身）在软重启后的首次拉取即完成：
+
+```
+config loaded: keep=[com.termux#0, com.omarea.vtools#0, github.tornaco.android.thanos.pro#0]
+               kill=[com.xunmeng.pinduoduo#999, com.xunmeng.pinduoduo#0, com.xunmeng.pinduoduo#998]
+```
 
 ## 已知限制
 
@@ -239,3 +306,8 @@ App 侧:
   跳过整段（连 `D0` 都不进），此时划掉一张卡不会杀进程。`J0` 同时比较 `pkgName` 与
   `userId`（`v.java:245`），因此**本体与分身互不影响**。属系统既有行为，本模块不介入。
 - 「划卡不杀」名单同时会让该应用不被 athena 的后台内存清理回收（两者共用同一判定入口）。
+- **无 launcher 入口的分身应用不会出现在列表里**：分身枚举走
+  `LauncherApps#getActivityList`，只覆盖带 `MAIN`/`LAUNCHER` 入口的应用。
+- **配置拉取依赖第 5 个 Hook**：若 ColorOS 后续改类名/方法（`OplusAppStartupManager#shouldPreventStartProvider`），
+  拉取会被厂商拦掉，表现为模块日志 `config bridge not ready after N attempts`，
+  名单停在最后一次成功拉取的值（不会静默变成空名单）。
