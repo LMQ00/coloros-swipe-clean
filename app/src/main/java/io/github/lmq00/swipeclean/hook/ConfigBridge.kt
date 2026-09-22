@@ -17,21 +17,34 @@ import java.util.concurrent.atomic.AtomicBoolean
  * Hook 侧配置读取：直接向模块 App 的 [io.github.lmq00.swipeclean.ConfigProvider] 拉取
  * （`contentResolver.call("get")`）。
  *
- * 两个触发点，同一条拉取路径：
- * - 判定路径上的惰性刷新（2 秒 TTL；非阻塞——过期时起后台线程拉取，本次判定仍用当前缓存）
+ * 三个触发点，同一条拉取路径：
+ * - system_server 启动期：带重试的初始化（见 [install]），直到「接收器注册成功 + 首次拉取成功」
  * - 收到 App 的配置变更广播后立即拉取
+ * - 判定路径上的惰性刷新（2 秒 TTL；非阻塞——过期时起后台线程拉取，本次判定仍用当前缓存）
  *
- * 拉取失败沿用上次成功的缓存并记日志，绝不静默失败。
+ * 拉取失败沿用上次成功的缓存并记日志；从未成功拉取过时，判定路径会做一次同步补拉，
+ * 绝不拿空名单静默判定。
  */
 internal object ConfigBridge {
 
     private const val TAG = ModuleMain.TAG
     private const val TTL_MS = 2_000L
+    private const val RETRY_MS = 1_000L
+
+    /** 启动期重试上限：AMS 就绪通常在 1~2 秒内，60 次留足余量。 */
+    private const val RETRY_LIMIT = 60
 
     private val URI = Uri.parse("content://" + Config.AUTHORITY)
 
     @Volatile
     private var resolver: ContentResolver? = null
+
+    @Volatile
+    private var receiverRegistered = false
+
+    /** 是否成功拉取过至少一次。 */
+    @Volatile
+    private var loaded = false
 
     @Volatile
     private var keep: Set<String> = emptySet()
@@ -43,42 +56,57 @@ internal object ConfigBridge {
     private var loadedAt = 0L
 
     @Volatile
-    private var firstPull = true
+    private var lastPullOk = true
 
     @Volatile
-    private var lastPullOk = true
+    private var registerFailureLogged = false
 
     private val refreshing = AtomicBoolean(false)
 
-    /** 取 systemContext、注册配置广播、做首次拉取。整体放后台线程，不阻塞 system_server 启动。 */
+    /**
+     * 取 systemContext、注册配置广播、做首次拉取。整体放后台线程，不阻塞 system_server 启动。
+     *
+     * **必须带重试**：`onSystemServerStarting` 早于 AMS 初始化，此时 `ActivityThread#mgr`
+     * （IActivityManager）为 null，注册接收器（`ContextImpl.registerReceiverInternal`）与
+     * 拉取 provider（`ActivityThread.acquireProvider`）都会 NPE。实测时间线：
+     * 本回调 22:51:03.958 失败，AMS 就绪约在 22:51:04.3。
+     */
     fun install(module: XposedModule) {
         Thread {
-            val context = ModuleMain.systemContext()
-            if (context == null) {
-                module.log(Log.WARN, TAG, "system context unavailable, config bridge not installed")
-                return@Thread
+            var attempt = 0
+            while (attempt < RETRY_LIMIT) {
+                attempt++
+                val context = ModuleMain.systemContext()
+                if (context != null) {
+                    resolver = context.contentResolver
+                    if (!receiverRegistered) registerReceiver(module, context)
+                    if (!loaded) pull(module)
+                }
+                if (receiverRegistered && loaded) break
+                Thread.sleep(RETRY_MS)
             }
-            resolver = context.contentResolver
-            runCatching {
-                ContextCompat.registerReceiver(
-                    context,
-                    object : BroadcastReceiver() {
-                        override fun onReceive(c: Context?, intent: Intent?) =
-                            refresh(module, force = true)
-                    },
-                    IntentFilter(Config.ACTION_CONFIG_CHANGED),
-                    ContextCompat.RECEIVER_EXPORTED,
+            if (receiverRegistered && loaded) {
+                module.log(Log.INFO, TAG, "config bridge ready (attempt=$attempt)")
+            } else {
+                module.log(
+                    Log.WARN,
+                    TAG,
+                    "config bridge not ready after $attempt attempts" +
+                        " (receiver=$receiverRegistered loaded=$loaded); 2s TTL fallback",
                 )
-            }.onFailure {
-                module.log(Log.WARN, TAG, "config receiver register failed (2s TTL fallback)", it)
             }
-            refresh(module, force = true)
         }.apply { isDaemon = true }.start()
     }
 
     /** 名单 key 为 `<pkg>#<userId>`：分身是独立 user，包名与本体相同。 */
     fun modeOf(module: XposedModule, pkg: String, userId: Int): Int {
-        refresh(module, force = false)
+        if (loaded) {
+            refresh(module)
+        } else if (SystemClock.elapsedRealtime() - loadedAt >= TTL_MS) {
+            // 从未成功拉取过（例如 App 被卸载）：同步补一次，避免拿空名单判定。
+            // pull 每次都刷新 loadedAt，天然限频。
+            pull(module)
+        }
         val key = Config.key(pkg, userId)
         return when {
             keep.contains(key) -> Config.MODE_KEEP
@@ -87,9 +115,37 @@ internal object ConfigBridge {
         }
     }
 
-    private fun refresh(module: XposedModule, force: Boolean) {
+    /** 注册配置变更广播。失败只记一次日志，重试由 [install] 负责。 */
+    private fun registerReceiver(module: XposedModule, context: Context) {
+        val result = runCatching {
+            ContextCompat.registerReceiver(
+                context,
+                object : BroadcastReceiver() {
+                    // 广播在主线程派发，拉取走后台线程，避免阻塞 system_server 主线程。
+                    override fun onReceive(c: Context?, intent: Intent?) {
+                        Thread { pull(module) }.apply { isDaemon = true }.start()
+                    }
+                },
+                IntentFilter(Config.ACTION_CONFIG_CHANGED),
+                ContextCompat.RECEIVER_EXPORTED,
+            )
+        }
+        receiverRegistered = result.isSuccess
+        if (result.isFailure && !registerFailureLogged) {
+            registerFailureLogged = true
+            module.log(
+                Log.WARN,
+                TAG,
+                "config receiver register failed (retry pending)",
+                result.exceptionOrNull(),
+            )
+        }
+    }
+
+    /** 2 秒 TTL 惰性刷新：过期时起后台线程拉取，本次判定仍用当前缓存。 */
+    private fun refresh(module: XposedModule) {
         if (resolver == null) return
-        if (!force && SystemClock.elapsedRealtime() - loadedAt < TTL_MS) return
+        if (SystemClock.elapsedRealtime() - loadedAt < TTL_MS) return
         if (!refreshing.compareAndSet(false, true)) return
         Thread {
             try {
@@ -114,10 +170,10 @@ internal object ConfigBridge {
         lastPullOk = true
         val newKeep = bundle.getStringArray(Config.KEY_KEEP)?.toSet() ?: emptySet()
         val newKill = bundle.getStringArray(Config.KEY_KILL)?.toSet() ?: emptySet()
-        if (firstPull || newKeep != keep || newKill != kill) {
-            firstPull = false
+        if (!loaded || newKeep != keep || newKill != kill) {
             module.log(Log.INFO, TAG, "config loaded: keep=$newKeep kill=$newKill")
         }
+        loaded = true
         keep = newKeep
         kill = newKill
     }
