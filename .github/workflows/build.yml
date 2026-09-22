@@ -43,18 +43,26 @@ jobs:
       - name: Probe SDK (temporary)
         run: |
           SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-$HOME/Android/sdk}}"
-          echo "SDK=$SDK"
-          ls -d "$SDK"/platforms/* || true
           JAR="$SDK/platforms/android-36/android.jar"
-          ls -l "$JAR" || true
-          echo "--- classes present ---"
-          unzip -l "$JAR" | grep -E "android/os/(BaseBundle|Bundle|UserHandle)\.class" || true
-          echo "--- Bundle members ---"
-          javap -cp "$JAR" android.os.Bundle | grep -iE "class |StringSet|extends" || true
-          echo "--- BaseBundle members ---"
-          javap -cp "$JAR" android.os.BaseBundle 2>&1 | grep -iE "class |StringSet|putString" || true
-          echo "--- UserHandle members ---"
-          javap -cp "$JAR" android.os.UserHandle 2>&1 | head -40 || true
+          echo "=== BaseBundle full ==="
+          javap -cp "$JAR" android.os.BaseBundle
+          echo "=== Bundle string members ==="
+          javap -cp "$JAR" android.os.Bundle | grep -iE "string" || true
+          echo "=== control: SharedPreferences.getStringSet ==="
+          javap -cp "$JAR" android.content.SharedPreferences | grep -i stringset || true
+          echo "=== Process ==="
+          javap -cp "$JAR" android.os.Process | grep -iE "myuid|userhandle" || true
+          echo "=== UserManager ==="
+          javap -cp "$JAR" android.os.UserManager | grep -iE "profile" || true
+          echo "=== LauncherApps ==="
+          javap -cp "$JAR" android.content.pm.LauncherApps || true
+          echo "=== Context.getUser ==="
+          javap -cp "$JAR" android.content.Context | grep -i "user" || true
+          echo "=== StringSet availability per platform ==="
+          for P in 34 35 36 36.1; do
+            printf "android-%s: " "$P"
+            javap -cp "$SDK/platforms/android-$P/android.jar" android.os.Bundle 2>/dev/null | grep -ci stringset
+          done
 
       - name: Assemble release
         env:
