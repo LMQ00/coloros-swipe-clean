@@ -214,14 +214,25 @@ App 侧:
   配置变更（UI）→ ConfigStore.setModes() → 写本地 SharedPreferences
                                         → sendBroadcast(ACTION_CONFIG_CHANGED)
 Hook 侧（system_server）:
-  system_server 启动 → ConfigBridge.install()：取 systemContext、注册广播接收器、
-                       contentResolver.call(content://<pkg>.config, "get") 拉一次 → 内存缓存
+  启动 → 先读 /data/system/swipeclean_config.json（纯文件 I/O，不依赖 AMS/App）→ 内存缓存
+       → 取 systemContext、注册广播接收器、contentResolver.call(content://<pkg>.config, "get")
+         （带重试：1s × 30 + 5s × 60，约 5.5 分钟）
   收到广播        → 立即再拉一次（后台线程）
   判定路径（2 秒 TTL 过期）→ 后台线程再拉一次，本次判定仍用当前缓存
+  拉取成功且内容变化 → 回写缓存文件
 ```
 
+- **Hook 侧缓存**（`/data/system/swipeclean_config.json`，system_server 可写）：
+  最后一次成功拉取的结果。为什么需要：开机窗口内 ColorOS 会拦第三方 App 启动
+  （`isPreventBootStartData`，`OplusAppStartupManager.java:4082`，默认 `preventDuration = 30s`，
+  名单 `BOOT_PREVENT_START_APPLIST`），实测**完整重启后启动期 60 次拉取全部失败**，
+  直到用户打开 App 才成功——期间名单为空、划卡走系统默认。有缓存后开机即可用上次名单，
+  拉取退化为对账。
+- **模块自身恒「不杀」**：`ConfigBridge.modeOf` 对本模块包名直接返回 `MODE_KEEP`，
+  避免配置通道的一端被划卡/athena 内存清理杀掉（UI 里不列出本模块，无冲突）。
+
 - **单一真相来源**：App 的 SharedPreferences（`/data/data/io.github.lmq00.swipeclean/shared_prefs/config.xml`）。
-  Hook 侧只是内存缓存，不产生副本分叉。
+  Hook 侧的内存与文件缓存都只是副本，每次拉取成功即被覆盖。
 - **provider**：`ConfigProvider`，authority `io.github.lmq00.swipeclean.config`，`exported="true"`；
   内部校验 `Binder.getCallingUid() == 1000`（非 1000 记日志并返回 null）。
 - **旧名单迁移**：`ConfigProvider.call` 首次被调用时若发现旧格式元素（不含 `#`），
@@ -319,6 +330,8 @@ config loaded: keep=[com.termux#0, com.omarea.vtools#0, github.tornaco.android.t
 - 「划卡不杀」名单同时会让该应用不被 athena 的后台内存清理回收（两者共用同一判定入口）。
 - **无 launcher 入口的分身应用不会出现在列表里**：分身枚举走
   `LauncherApps#getActivityList`，只覆盖带 `MAIN`/`LAUNCHER` 入口的应用。
+- **配置来源仍是 App**：`/data/system/swipeclean_config.json` 只是 Hook 侧副本。
+  App 被卸载且缓存仍在时，模块会继续按最后一次名单执行（模块本身通常也会同时被卸载）。
 - **配置拉取依赖第 5 个 Hook**：若 ColorOS 后续改类名/方法（`OplusAppStartupManager#shouldPreventStartProvider`），
-  拉取会被厂商拦掉，表现为模块日志 `config bridge not ready after N attempts`，
-  名单停在最后一次成功拉取的值（不会静默变成空名单）。
+  拉取会被厂商拦掉，表现为模块日志 `config bridge not ready after N attempts` 或
+  `config pull failed: …`，此时按缓存里的最后一次名单执行（不会静默变成空名单）。

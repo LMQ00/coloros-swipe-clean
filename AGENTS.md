@@ -25,9 +25,13 @@ ColorOS / realme UI 的「划卡（recents swipe）杀不杀」白名单 LSPosed
 
 - 「划卡不杀」：`com.omarea.vtools` 划卡后卡片消失、进程保留
 - 「划卡必杀」：`com.xunmeng.pinduoduo` 划卡瞬间全部进程结束，100 秒内无自启
-- **配置通道**（2026-09-23）：App `ConfigProvider` + 配置广播。实测软重启后
-  `config bridge ready (attempt=13)` + `config loaded: …`，**未打开 App 即自动恢复**；
-  UI 改配置 1 秒内生效；拉取只拉起 App 进程，无界面、无通知
+- **配置通道**（2026-09-23）：App `ConfigProvider` + 配置广播 + Hook 侧落盘缓存
+  （`/data/system/swipeclean_config.json`）。实测软重启后 `config bridge ready (attempt=13)` +
+  `config loaded: …`，**未打开 App 即自动恢复**；UI 改配置 1 秒内生效；拉取只拉起 App 进程，
+  无界面、无通知。完整重启时 ColorOS 会拦开机窗口内的第三方 App 启动（`isPreventBootStartData`），
+  实测启动期拉取全失败、直到用户打开 App 才成功——缓存即为此而加：开机先读它
+- **模块自身恒「不杀」**：`ConfigBridge.modeOf` 对本模块包名直接返回 `MODE_KEEP`，
+  配置通道的一端不会被划卡/内存清理杀掉
 - **分身独立设置**（2026-09-23）：名单元素 `<pkg>#<userId>`，UI 在本体条目下展开分身子项。
   实测本体=必杀、998/999=不杀：划本体卡 `am_kill` 首字段 `0`、3 个进程全灭；
   `u998_a367` / `u999_a367` 各 3 进程存活，互不误伤
@@ -46,6 +50,8 @@ ColorOS / realme UI 的「划卡（recents swipe）杀不杀」白名单 LSPosed
 | 配置通道**唯一**：App ContentProvider（`call("get")`）+ 配置广播。不得再引入 LSPosed `getRemotePreferences` / `XposedServiceHelper`。 | 代码 |
 | 配置拉取**必须**放行本模块自身 provider 冷启动（`AppStartupHooks`，Hook 5）；该 Hook **只准**对本模块包名生效，不得放宽其它应用。 | 代码 |
 | 配置拉取**必须**带启动期重试：`onSystemServerStarting` 早于 AMS 就绪，注册接收器与拉取 provider 都会 NPE（实测）。 | 代码 |
+| 开机**必须**先读 Hook 侧缓存（`/data/system/swipeclean_config.json`）再尝试拉取：完整重启后 ColorOS 会拦开机窗口内的第三方 App 启动，实测拉取全失败。 | 代码 |
+| 模块自身 App **必须**恒视为「不杀」（`ConfigBridge.modeOf` 对本模块包名返回 `MODE_KEEP`），避免配置通道被划卡/内存清理杀掉。 | 代码 |
 | 配置读取失败**必须**降级并打日志：沿用上次成功缓存，无缓存则空名单（全走系统默认）。禁止静默失败。 | 代码 |
 | ContentProvider 与广播接收端**必须**校验来源 uid（`SYSTEM_UID` / 模块 App uid）。 | 代码 |
 | 名单 key **必须**含 userId（`<pkg>#<userId>`），**不得硬编码 999** —— 分身 user 实测有 998、999 多个值。 | 代码 |
@@ -86,6 +92,8 @@ Kotlin 必须 ≥ 2.2，否则在该 classpath 下会触发 FIR 内部崩溃（`
 - **不要在编译期使用 `Bundle#putStringSet/getStringSet` 或 `UserHandle` 的
   `of/getUserId/myUserId/getIdentifier`**：这些不是公开 API，CI 侧 `android.jar` 里不存在
   （`javap` 实测）。用 `putStringArray/getStringArray` 与 `uid / PER_USER_RANGE` 替代。
+- **配置缓存**：Hook 侧 `/data/system/swipeclean_config.json`（uid 1000 可写，开机先读）。
+  App 的 `shared_prefs/config.xml` 仍是唯一真相来源，缓存只是副本。
 - **分身测试样本**：拼多多 `com.xunmeng.pinduoduo`，user 998 / 999 各一个分身，
   uid 分别为 `99810367` / `99910367`（本体 `10367`）。
 - 日志位置、配置生效验证方法、分身验证方法、取回 CI 产物与安装步骤，见 `docs/development.md`。

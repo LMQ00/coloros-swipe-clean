@@ -73,8 +73,9 @@ loaded: process=system, systemServer=true, api=102
 swipe hooks installed: 2
 app startup hooks installed: 1
 athena class not found: com.oplus.athena.common.parser.athena.FilterHelper   ← athena 尚未加载，预期
+config restored from cache: keep=[…] kill=[…]                                ← 开机即用上次名单（不依赖 App）
 config receiver register failed (retry pending)                              ← 首次尝试，AMS 未就绪，预期
-config pull failed                                                          ← 同上
+config pull failed: NullPointerException: …                                  ← 同上
 athena hooks installed: 1
 athena swipe hooks installed: 1
 allowed provider start for io.github.lmq00.swipeclean (vendor block overridden)
@@ -83,10 +84,14 @@ config loaded: keep=[…] kill=[…]
 ```
 
 - `config bridge ready (attempt=N)` 前的失败是**预期**的：`onSystemServerStarting` 早于 AMS 初始化，
-  注册接收器与拉取 provider 都会 NPE，`ConfigBridge` 以 1 秒间隔重试（上限 60 次）。
-- 若始终只有 `config bridge not ready after N attempts`，说明 ColorOS 拦掉了 provider 冷启动
-  （`logcat` 搜 `OplusAppStartupManager` 应能看到 `prevent start …`），
-  即「第 5 个 Hook」没挂上。
+  注册接收器与拉取 provider 都会 NPE，`ConfigBridge` 带重试（1s × 30 + 5s × 60）。
+- `config restored from cache` 在**完整重启**后才关键：ColorOS 开机窗口内会拦第三方 App 启动
+  （`isPreventBootStartData`），实测启动期 60 次拉取全失败、直到用户打开 App 才成功；
+  有缓存就不会出现名单为空的空窗。
+- 若始终只有 `config bridge not ready after N attempts` 且没有 `config restored from cache`，
+  说明既拉不到、也没有缓存（例如全新安装后第一次开机）——此时名单为空（全走系统默认），
+  打开一次 App 即可写入缓存。
+- `config pull failed: <异常>` 只在**失败原因变化**时打一条，不刷屏。
 
 ### 验证配置是否生效
 
@@ -110,6 +115,15 @@ su -c 'cat /data/data/io.github.lmq00.swipeclean/shared_prefs/config.xml'
 
 更快的判据：模块日志里出现 `config loaded: keep=[…] kill=[…]`，说明 Hook 已读到当前名单
 （每次内容变化都会打一条）。改配置后应在 1 秒内看到新的一条。
+
+Hook 侧另有一份落盘缓存，开机时优先读它：
+
+```bash
+su -c 'cat /data/system/swipeclean_config.json'
+# {"keep":[…],"kill":[…]}
+```
+
+正常运行时它的内容与 App 的 prefs 一致（每次拉取内容变化时回写）。
 
 **改动是否即时生效**（不重启、不打开 UI）：
 
@@ -200,9 +214,9 @@ dual users=[998, 999] ordinals={999=1, 998=2} packages={998=…, 999=…}
 1. LSPosed 里模块是否启用、作用域里**系统框架**是否勾选（必须是进程名 `system`）。
 2. 模块日志里是否有 `swipe hooks installed: 2` / `app startup hooks installed: 1` /
    `athena hooks installed: 1` / `athena swipe hooks installed: 1`。
-3. 模块日志里是否有 `config bridge ready (attempt=N)` 与 `config loaded:` 且名单正确——
-   只有 `config bridge not ready after N attempts` 说明配置没到 Hook 侧（ColorOS 拦了
-   provider 冷启动，见「第 5 个 Hook」）。
+3. 模块日志里是否有 `config restored from cache:` / `config bridge ready (attempt=N)` /
+   `config loaded:` 且名单正确——只有 `config bridge not ready after N attempts` 说明既拉不到
+   也没有缓存（ColorOS 拦了 provider 冷启动，见「第 5 个 Hook」）。
 4. 出现 `swipe-up keep:` / `athena swipe keep:` 但进程仍死，属未覆盖路径（见
    [`architecture.md`](architecture.md) 的已知限制），附日志反馈。
 5. **改了配置但不生效**：先确认不是配置通道问题（第 3 步），再确认划卡时该包在最近任务里

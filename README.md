@@ -123,7 +123,8 @@ CI：推送到 `main` 后由 GitHub Actions 编译，产物在 Actions 的 Artif
 1. LSPosed 里模块是否启用、作用域里 **系统框架** 是否勾选（必须是进程名 `system`）。
 2. 日志：`/data/adb/lspd/log/modules_*.log` 里搜 `SwipeClean`，正常应有
    `swipe hooks installed: 2` / `app startup hooks installed: 1` / `athena hooks installed: 1` /
-   `athena swipe hooks installed: 1`，随后是 `config bridge ready (attempt=N)` 与 `config loaded: …`。
+   `athena swipe hooks installed: 1`，随后是 `config restored from cache: …`、
+   `config bridge ready (attempt=N)` 与 `config loaded: …`。
 3. 若出现 `swipe-up keep:` / `athena swipe keep:` 但进程仍死，属未覆盖的路径，请附日志反馈。
 4. **改了配置但不生效**：先看模块日志里有没有 `config loaded: keep=[…] kill=[…]`。
    - **有且内容正确** → 配置已到 Hook 侧，问题在判定链（看下一条）。
