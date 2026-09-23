@@ -1,22 +1,33 @@
-# Athena 逆向笔记：划卡（recents swipe）杀不杀的判定链
+# 上游行为参考（athena / ColorOS）
 
-> 素材：`Athena_6.0.1_new.apk`（设备 `/system_ext/app/Athena/Athena.apk`，
-> md5 `60944a5ffc5afb6d393a5ea52d77d90c`，versionCode 601 / versionName 6.0.1，
-> 构建提交 `62c260e`，构建日期 `260724`）。
-> 该 APK 的 `com.oplus.athena.*` 包未被混淆，类名/方法名可直接引用。
->
-> 框架侧素材：`/system/framework/services.jar`、`/system/framework/oplus-services.jar`。
-> 设备：realme UI / ColorOS（Android 16），LSPosed v2.1.1。
->
-> 复现命令：
-> ```bash
-> jadx -d ~/tmp/athena_new Athena_6.0.1_new.apk
-> unzip -p /system/framework/oplus-services.jar classes3.dex > ~/tmp/oplus.dex
-> ```
+本文回答——上游（athena / ColorOS）的真实行为是什么、结论从哪来。
 
-## 1. 结论
+本文只写上游判定链与实机观察；本模块自己的挂点、实现与契约见文末「挂点与配置通道」的指针。
 
-划卡后进程会不会被杀，由**两条独立路径**共同决定，任何一条放行都不够：
+## 1. 素材与复现
+
+| 项 | 值 |
+| --- | --- |
+| APK | `Athena_6.0.1_new.apk`（设备路径 `/system_ext/app/Athena/Athena.apk`） |
+| md5 | `60944a5ffc5afb6d393a5ea52d77d90c` |
+| versionCode / versionName | `601` / `6.0.1` |
+| 构建提交 / 构建日期 | `62c260e` / `260724` |
+| 框架侧素材 | `/system/framework/services.jar`、`/system/framework/oplus-services.jar` |
+| 设备 | realme UI / ColorOS（Android 16），LSPosed v2.1.1 |
+
+该 APK 的 `com.oplus.athena.*` 包**未被混淆**，类名/方法名可直接引用。
+（例外：划卡动作类 `...prockill.clear.v` 是混淆名，见 §9 第 2 条。）
+
+复现命令：
+
+```bash
+jadx -d ~/tmp/athena_new Athena_6.0.1_new.apk
+unzip -p /system/framework/oplus-services.jar classes3.dex > ~/tmp/oplus.dex
+```
+
+## 2. 结论：划卡杀不杀由两条独立路径决定
+
+任何一条放行都不够：
 
 ```
 路径 A（框架）：ActivityTaskSupervisor#killTaskProcessesIfPossible(Task)
@@ -42,7 +53,7 @@
 出处：`services.jar` → `com/android/server/wm/ActivityTaskSupervisor.java:1235-1253`；
 `Athena` → `.../prockill/clear/v.java:97-120`。
 
-## 2. athena 概览
+## 3. athena 概览
 
 | 项 | 值 | 出处 |
 | --- | --- | --- |
@@ -52,15 +63,10 @@
 | 常驻 | `android:persistent="true"` | `AndroidManifest.xml:application` |
 | 系统服务进程 | `com.oplus.athena.systemservice.OplusAthenaSystemService`，`android:process="system"` | `AndroidManifest.xml:86-89` |
 
-`android:process="system"` 表示 athena 的系统服务与 system_server **同进程**，因此
-LSPosed 作用域只需 `system`（进程名，不是包名 `android`），athena 的类由它自己的 APK 提供，
-需等 `onPackageLoaded("com.oplus.athena")` 拿到对应 ClassLoader 再挂。
+`android:process="system"` 表示 athena 的系统服务与 system_server **同进程**；athena 的类由它自己的
+APK 提供，需等 `onPackageLoaded("com.oplus.athena")` 拿到对应 ClassLoader。
 
-`module.prop` 里 `staticScope=false`：作用域交给用户在 LSPosed 里选，
-`scope.list` 的 `system` 只作为推荐项预勾选。若写成 `true`，LSPosed 会锁死作用域，
-界面里只能看到声明的那一项、无法增删（早期版本就是这个表现）。
-
-## 3. 路径 B：athena 的划卡清理动作
+## 4. 路径 B：athena 的划卡清理动作
 
 最近任务（`com.oplus.recents`）划掉一张卡后，向 athena 发起
 `oplus.intent.action.REQUEST_CLEAR_SPEC_APP`（`type=13`）：
@@ -99,7 +105,11 @@ public static void c(..., boolean z) {
 实机日志里能同时看到 `Athena : SwipeUpClearAction: remove task, taskId: N`（移除任务）
 与 `OplusClearSystemService: F [0, <pkg>, reason: ...]`（强制结束）。
 
-### 3.1 `getStopType` 的返回值语义（各调用方一致）
+**卡片移除与杀不杀无关**：任务 id 在 `G0` 里（`v.java:501`）就已登记进 `f1446s`，
+由 `e1` 末尾的 `E0()`（`v.java:121-125` -> `F0` -> `utils.p.j` -> `z0.l.n` = `removeTask`）统一移除。
+实测确认：即使跳过 `D0`，卡片照常消失。
+
+### 4.1 `getStopType` 的返回值语义（各调用方一致）
 
 `FilterHelper#getStopType(ProcDetailInfo, r0.a)`（`FilterHelper.java:2062`）与
 `getStopType(ProcDetailInfo, r0.a, List)`（`:2896`）都走 `getStopTypeInner`（`:2066`）：
@@ -125,11 +135,39 @@ public int getStopType(ProcDetailInfo p, r0.a a, List<String> l) {
 | `clear/l.java:221`（深度清理） | `== 0` -> 保留（`U(..., 6)`）；否则走 kill 分支 |
 | `clear/i.java:289`（内存超标） | `== 0` -> 保留；`2`/`4` -> kill |
 
-因此模块对名单内应用统一返回 **`0`（保留）**，对「必杀」名单返回 **`2`**。
+因此名单内应用统一返回 **`0`（保留）**，对「必杀」名单返回 **`2`**。
 
-## 4. 路径 A：框架侧判定
+### 4.2 `stopType == 2` 之后仍有两处闸门
 
-### 4.1 判定实现
+实测：路径 A 返回 `3`、路径 B 的 `getStopTypeInner` 返回 `2` 之后，**带常驻服务的应用（微信）
+依然不会被杀**。两处闸门：
+
+- 框架侧 `ActivityManagerService#killProcessesForRemovedTask`：
+
+  ```java
+  if (wpc.hasRecentTasks()) { log "skip ... because hasRecentTasks"; }
+  else {
+      ProcessRecord pr = wpc.mOwner;
+      if (ActivityManager.isProcStateBackground(pr.mState.getSetProcState())
+              && pr.mReceivers.numberOfCurReceivers() == 0
+              && !pr.mState.hasStartedServices()) {
+          pr.killLocked("remove task", 10, 22, true);
+      } else {
+          pr.setWaitingToKill("remove task");   // 只标记，等它自己变后台
+      }
+  }
+  ```
+
+- athena 侧 `D0` 自身：`stopType == 2` 之后还有
+  `!t0(tVar, hVar, proc, false)`（`b.t0` -> `h.x` 的名单 + `t.d`）与
+  `aVar.e(pkg) || !O0(proc)`（`e` = `FilterHelper.getBlackList().contains`，`O0` = 最近任务锁）。
+
+因此强杀必须落在划卡决策点自身，走 athena 自己的 force-stop（`utils.p.b`）；
+为什么必须这么做见 docs/decisions.md，模块侧怎么调用见 docs/architecture.md。
+
+## 5. 路径 A：框架侧判定
+
+### 5.1 判定实现
 
 `oplus-services.jar` → `com/android/server/wm/OplusAthenaManager.java:110-164`：
 
@@ -165,7 +203,7 @@ if (filterType != 2) {
 }
 ```
 
-### 4.2 系统自带白名单来源
+### 5.2 系统自带白名单来源
 
 `remove_task_filter_pkg` / `remove_task_filter_proc` 由 athena 解析配置后推送给框架：
 
@@ -180,157 +218,156 @@ if (filterType != 2) {
 > `getRemoveTaskFilterPkgList()` / `getRemoveTaskFilterProcList()` 在 athena 内部**没有**业务调用者，
 > 只有 dump 打印；真实消费者是框架 `OplusListManager`。
 
-### 4.3 另一条相关机制：最近任务锁定
+### 5.3 另一条相关机制：最近任务锁定
 
 `OplusAthenaManager#isRecentLockTask(Task)`（`OplusAthenaManager.java:378-392`）读取
 `OplusListManagerImpl#getRecentLockListWithUserIdAsUser`（对应 athena 的 `recent_lock_list`，
 由 `FilterHelper#isRecentLockApp` 暴露给 `PermStatusProvider`）。
 调用点在 `com.android.server.am.ActivityManagerService`。
-这是「最近任务卡片上的锁」特性，与本节的白名单相互独立。
+这是「最近任务卡片上的锁」特性，与 §5.2 的白名单相互独立；用户手动锁定过的卡片
+不受任何名单控制（见 §9 第 7 条）。
 
-## 5. 本模块的 Hook 点
+## 6. 本模块的挂点与配置通道
 
-| # | 类 | 方法 | 名单命中时的行为 |
-| --- | --- | --- | --- |
-| 1 | `com.android.server.wm.OplusAthenaManager` | `getRemoveTaskFilterType(WindowProcessController)` | 返回 `1`（不杀）/ `3`（强杀） |
-| 2 | `com.android.server.wm.ActivityTaskSupervisorExtImpl` | 同上 | 同上 |
-| 3 | `com.oplus.athena.common.parser.athena.FilterHelper` | `getStopTypeInner(ProcDetailInfo, r0.a)` | 返回 `0`（保留）/ `2`（强杀） |
-| 4 | `com.oplus.athena.systemservice.action.prockill.clear.v` | `D0(t, h, r0.a, ClearRecord, ProcDetailInfo)` | 不杀：跳过；必杀：调用 athena 自己的 force-stop 后跳过 |
+- 本模块的 5 个 Hook 点见 docs/architecture.md。
+- 模块 ↔ 框架的配置通道（历史，已被取代）：该通道已废弃，现行契约见 docs/api.md。
 
-未命中时 `chain.proceed()` 交回系统原逻辑。包名来源：
+## 7. 应用分身（MultiApp）的真实形态
 
-- Hook 1/2：`WindowProcessController#mInfo`（`ApplicationInfo.packageName`，包内可见，需 `setAccessible`），
-  回退 `mName` 的 `:` 前缀。
-- Hook 3/4：`ProcDetailInfo#pkgName`（`public String`，`com.oplus.app.athena.ProcDetailInfo:36`）。
+### 7.1 机制（实机验证，2026-09-22）
 
-Hook 3 挂在 `getStopTypeInner` 而非 `getStopType`，是因为两个重载都收敛到它，一处即可覆盖。
+- ColorOS 分身 = **独立 user**，类型 `MultiApp`，`parentId=0`，且**可以有多个**：
 
-### 5.1 为什么必杀还需要 Hook 4
-
-实测：Hook 1/2 返回 `3`、Hook 3 返回 `2` 之后，**带常驻服务的应用（微信）依然不会被杀**。
-两处闸门：
-
-- 框架侧 `ActivityManagerService#killProcessesForRemovedTask`：
-
-  ```java
-  if (wpc.hasRecentTasks()) { log "skip ... because hasRecentTasks"; }
-  else {
-      ProcessRecord pr = wpc.mOwner;
-      if (ActivityManager.isProcStateBackground(pr.mState.getSetProcState())
-              && pr.mReceivers.numberOfCurReceivers() == 0
-              && !pr.mState.hasStartedServices()) {
-          pr.killLocked("remove task", 10, 22, true);
-      } else {
-          pr.setWaitingToKill("remove task");   // 只标记，等它自己变后台
-      }
-  }
+  ```
+  UserInfo{998:MultiApp:4001010} serialNo=11 isPrimary=false parentId=0
+  UserInfo{999:MultiApp:4001010} serialNo=10 isPrimary=false parentId=0
   ```
 
-- athena 侧 `D0` 自身：`stopType == 2` 之后还有
-  `!t0(tVar, hVar, proc, false)`（`b.t0` -> `h.x` 的名单 + `t.d`）与
-  `aVar.e(pkg) || !O0(proc)`（`e` = `FilterHelper.getBlackList().contains`，`O0` = 最近任务锁）。
+- **分身包名与本体完全相同，仅 uid 不同**：
 
-因此 Hook 4 直接落在划卡决策点上，必杀时调用 athena 自己的 force-stop：
+  ```
+  pm list packages -U --user 0    → package:com.xunmeng.pinduoduo uid:10367
+  pm list packages -U --user 998  → package:com.xunmeng.pinduoduo uid:99810367
+  pm list packages -U --user 999  → package:com.xunmeng.pinduoduo uid:99910367
+  ```
+
+  `99810367 = 10367 + 998 × 100000`，符合 Android 多用户 uid 编码。
+  `OplusMultiApp.apk` 全库 grep 无任何包名改写逻辑。
+
+- `MultiAppConstants.java:44` → `USER_ID_MULTI_APP = 999` 只是**首个**分身的 id，
+  **userId 不固定** → 名单 key 不得硬编码 999。
+- `/data/oplus/os/multiapp/sys_created_multi_app_config.xml` 恒为 `<config version="2" />`，
+  **不记录已创建的分身**，不是可用的枚举来源。
+
+### 7.2 判定链取 userId
+
+| 位置 | userId 来源 | 说明 |
+| --- | --- | --- |
+| `getStopTypeInner` / `D0` 一路 | `ProcDetailInfo.userId` | `public int` 字段，与 `uid`、`realUid` 并列 |
+| `getRemoveTaskFilterType` 一路 | `WindowProcessController.mUserId` | 实测字段（`WindowProcessController.java:122`）；取不到回退 `mInfo.uid / PER_USER_RANGE` |
+
+`UserHandle` 的 `of()` / `getUserId()` / `myUserId()` / `getIdentifier()` **都不是公开 API**
+（CI 侧 `android-36/android.jar` 用 `javap` 实测确认，对照 `SharedPreferences#getStringSet` 在），
+因此 userId 一律用 `uid / 100000`（`PER_USER_RANGE`）换算，不引用 `UserHandle` 的访问器。
+
+### 7.3 `G0` 的闸门是 user 感知的
+
+`J0`（`clear.v` / `v.java:245`）同时比较 `pkgName` 与 `userId`：
 
 ```java
-com.oplus.athena.systemservice.utils.p.b(ctx, pkg, userId, reason, type, a, b)
-  -> p.c(...) -> j1.h.g(pkg, userId, 13, type + 2000, ...)   // 与系统清理同一条路
-  -> i.t().g(...) -> OplusAthenaAmManager#forceStopWithReason（失败退回 forceStopPackageAsUser）
+if (procDetailInfo.pkgName.equals(intent.getComponent().getPackageName())
+    && recentTaskInfo.userId == procDetailInfo.userId      // ← 同时比较 userId
+    && !T0(procDetailInfo, recentTaskInfo)) {
+    return true;                                            // 跳过整段
+}
 ```
 
-放在后台线程调用，避免在划卡流程里同步重入。
+`Z0` 用 `t0.o.b(pkgName, uid)` 同样带 uid。**因此同包名的不同 user（本体 / 998 / 999）
+互不影响，不需要为了分身去改 `G0`/`J0`。**
 
-**跳过 `D0` 不会影响卡片移除**：任务 id 在 `G0` 里（`v.java:501`）就已登记进 `f1446s`，
-由 `e1` 末尾的 `E0()`（`v.java:121-125` -> `F0` -> `utils.p.j` -> `z0.l.n` = `removeTask`）统一移除。
-实测确认卡片照常消失、进程存活。
+实测印证：998 与 999 同时有任务时，划掉 998 的卡只杀 998，999 完好。
 
-## 6. 模块 ↔ 框架的配置通道（历史，已被取代）
+### 7.4 同 profile group 的跨 user 查询不过滤
 
-> **2026-09-23 起本模块不再使用该通道。** 当前实现（App `ConfigProvider` + 配置广播 +
-> 第 5 个 Hook 放行自身 provider 冷启动）见 [`architecture.md`](architecture.md)。
-> 本节保留，用于理解旧通道的失效模式，以及「为什么必须换」。
->
-> 代码侧已全部删除：`io.github.libxposed:service` 依赖、`XposedServiceHelper`、
-> `XposedProvider`、`getRemotePreferences`。
+分身 user 与当前 user **同 profile group**（`parentId=0`），
+`filterAppAccess` 对同 profile group 的跨 user 查询**不过滤**；
+`LauncherAppsService#getLauncherActivities` → `canAccessProfile` → `isProfileAccessible`
+对同 profileGroupId 的已启用 user 返回 true。Termux（`uid=10366 u0_a366`，**无 su**）实测：
 
-Hook 侧 `XposedInterface#getRemotePreferences(group)` 读的是**框架侧存储**（LSPosed 数据库
-`modules_config.db` 的 `module_configs` 表），不是模块 App 自己的 SharedPreferences。
-写入必须走 libxposed 服务通道：
+```
+cmd package list packages -U --user 998  → package:com.xunmeng.pinduoduo uid:99810367
+```
 
-1. App 依赖 `io.github.libxposed:service`，其 manifest 并入
-   `<provider android:name="io.github.libxposed.service.XposedProvider"
-   android:authorities="${applicationId}.XposedService" android:exported="true"/>`。
-2. 框架在**模块 App 进程启动时**调用该 provider（`SendBinder`）下发 `IXposedService` binder
-   （LSPosed `LSPModuleService.uidStarts`：仅对 `!legacy` 的模块、且每个 uid 只发一次）。
-3. App 通过 `XposedServiceHelper.registerListener` 拿到服务，
-   用 `service.getRemotePreferences(GROUP).edit()...commit()` 写入。
+uid 前缀 998 证明查询真的落在目标 user，不是回退到 0。
 
-三个坑：
+> 模块侧如何利用该结论枚举分身、以及分身在 UI 里怎么呈现，见 docs/architecture.md；
+> 名单 key 格式 `<pkg>#<userId>` 见 docs/data-model.md。
 
-- 若 App 在**尚未带上 `XposedProvider` 的版本**时启动过，框架那一次下发失败但 uid 已记入
-  `uidSet`，之后同一轮开机不会再发 —— 需要重启设备后才恢复正常。
-- `getRemotePreferences` 只在 App 注册过该 group 之后才对 Hook 侧可见；
-  App 未启动过时 Hook 读到空集（表现为所有应用都按「默认」放行）。
-- **重装模块 APK 后通道失效**（2026-09-22 实锤）：uid 不变，LSPosed 认为「已发过」而不再下发
-  binder；`ConfigStore.push()` 首行 `val target = remote ?: return` 静默返回，
-  本地写成功、框架侧永远不变，且无任何日志。
+## 8. ColorOS 开机窗口闸门
 
-  时间证据：
+### 8.1 启动窗口本身
 
-  ```
-  App config.xml           mtime = 2026-09-22 20:43:58    ← 用户设置必杀
-  modules_config.db-wal    mtime = 2026-09-22 20:52:28    ← 框架侧才被写入（重启后 App 启动那一刻）
-  ```
+- 闸门：`isPreventBootStartData`（`OplusAppStartupManager.java:4082`，默认 `preventDuration = 30s`），
+  名单常量 `BOOT_PREVENT_START_APPLIST`。
+- 实测：**完整重启后启动期 60 次拉取全部失败**，直到用户打开 App 才成功；
+  期间第三方 App 完全拉不起来。软重启 zygote 不解除该窗口（只有完整重启才会重新进入窗口期）。
 
-  期间划卡，Hook 读到空 `kill`，走系统原生路径 → 杀不掉。
-  **软重启 zygote 不足以恢复，必须完整重启设备。**
+### 8.2 provider 场景冷启动的判定链
 
-  > 读 `modules_config.db` 验证配置时**必须连 `-wal` 一起复制**，否则读到旧快照，
-  > 会得出「配置为空」的错误结论。详见 [`development.md`](development.md)。
+ColorOS 的启动管控会拦掉第三方 App 的 provider 场景冷启动——**即使调用方是 system_server**：
 
-该通道的失效模式已于 2026-09-23 消除：改为 App `ContentProvider`（Hook 主动
-`contentResolver.call("get")`）+ 配置变更广播，配置的唯一真相来源是 App 的 SharedPreferences。
-实现与实测踩到的两个坑（AMS 未就绪、ColorOS 拦 provider 冷启动）见
-[`architecture.md`](architecture.md)「配置通道」。
+```
+W/OplusAppStartupManager: prevent start io.github.lmq00.swipeclean,
+  cmp ComponentInfo{…/ConfigProvider} by contentprovider android callingUid 1000, scenePriority = 0
+E/ActivityThread: Failed to find provider info for io.github.lmq00.swipeclean.config
+```
 
-## 7. 失效风险
+判定链（`OplusAppStartupManager.java`，jadx 自 `/system/framework/oplus-services.jar`）：
+
+```
+AMS → shouldPreventStartProvider(proc, providerRecord, appInfo, callingPackage, callingUid)  // 2062
+       -> validStartupWithRestrict(providerRecord, null, 0, null, "provider")                 // 2068
+       -> handleStartProvider(providerRecord, proc)                                           // 2070
+            （callerApp.uid <= 10000 时直接放行）
+       -> !isAllowStartFromProvider(proc, providerRecord, appInfo, …)                          // 2080
+            - isRootOrShell(callingUid)                                                       // 2261（uid 1000 不算）
+            - isDefaultAllowStart(appInfo) || isInLruProcessesLocked(appInfo.uid)              // 2325
+            - inProtectWhiteList(pkg)                                                         // 2335
+            - isAllowAssociateByList(64, …)                                                   // 2352
+            - 全不满足 → 2380 打上面那条日志并 return false（= 不允许启动）
+```
+
+`OplusAppStartupManagerExtImpl` 只做配置场景转发（`notifyConfigExSceneUpdate`），没有 provider 闸门。
+
+该闸门的存在是模块侧必须放行自身 provider 冷启动的原因；模块怎么放行见 docs/architecture.md。
+
+## 9. 失效风险
 
 1. **ColorOS 版本差异**：`OplusAthenaManager` / `ActivityTaskSupervisorExtImpl` /
    `FilterHelper#getStopTypeInner` 均为私有实现，跨大版本可能改名或改变返回值语义。
-   Hook 失败时模块只打日志、不改变系统行为。
 2. **划卡动作类 `...prockill.clear.v` 是混淆名**（`v`/`d`/`b` 等单字母，同一 APK 内稳定，
-   跨 Athena 版本可能变化）。模块对它做了防御：类找不到时只打日志
-   （`swipe class not found: ...`），Hook 3 仍然生效 —— 此时「划卡不杀」正常，
+   跨 Athena 版本可能变化）。类找不到时只打日志（`swipe class not found: ...`），
+   `getStopTypeInner` 仍然生效 —— 此时「划卡不杀」正常，
    「划卡必杀」退化为 athena 自己的判定（可能被 `D0` 内闸门拦掉）。
-   挂载时机同时用 `onPackageLoaded("com.oplus.athena")` 与
-   `ActivityThread#mPackages` 取 `LoadedApk` ClassLoader 的兜底重试（30 × 2s）。
-3. **Hook 3 的作用域比「划卡」宽**：`getStopTypeInner` 也被内存清理、深度清理等调用方使用，
+3. **`getStopTypeInner` 的作用域比「划卡」宽**：它也被内存清理、深度清理等调用方使用（见 §4.1），
    因此名单内应用同时不会被 athena 的后台清理回收 —— 这与「保后台」的目标一致，但需知悉。
 4. **系统应用走另一条分支**：`G0()` 把 `procDetailInfo.system == true` 的应用交给 `I0()`
    （`v.java:171`），`I0` 不调用 `getStopType`，而是用自己的配置
    （`swipe_up_kill_system_audio_enabled` / `swipe_up_kill_system_pip_enabled` /
    `swipe_up_kill_system_visible_window_enabled` / `swipe_up_force_kill_system_process`）。
-   因此「划卡不杀」对系统应用不生效；模块 UI 默认不显示系统应用，与此一致。
+   因此「划卡不杀」对系统应用不生效。
    （另注：`system_process_force_cast_list` / `no_system_process_force_cast_list` 可以改写
    `system` 判定，属于系统自带白名单，模块不介入。）
 5. **`WindowProcessController` 字段**：`mInfo` / `mName` 为包内可见字段，若被重命名则取不到包名，
    该次调用按「默认」处理。
 6. **多任务场景**：`G0()` 中 `J0()` 在**同一 userId** 下该包还有其它任务时跳过 kill；
-   此时划掉一张卡不会杀进程，属系统既有行为，不受本模块控制。
-   `J0`（`v.java:245`）同时比较 `pkgName` 与 `userId`：
+   此时划掉一张卡不会杀进程，属系统既有行为。见 §7.3。
+7. **最近任务锁定**：用户手动锁定过的卡片由 `isRecentLockTask` 保护，不受名单控制。
+8. **provider 闸门被改动**：若 ColorOS 后续改掉
+   `OplusAppStartupManager#shouldPreventStartProvider`，第三方 App 的 provider 冷启动会被拦，
+   表现为模块日志 `config bridge not ready after N attempts` 或 `config pull failed: …`。
 
-   ```java
-   if (procDetailInfo.pkgName.equals(intent.getComponent().getPackageName())
-       && recentTaskInfo.userId == procDetailInfo.userId      // ← 同时比较 userId
-       && !T0(procDetailInfo, recentTaskInfo)) {
-       return true;
-   }
-   ```
-
-   因此**本体与各分身（不同 user）互不影响**。
-7. **最近任务锁定**：用户手动锁定过的卡片由 `isRecentLockTask` 保护，本模块不覆盖该路径。
-
-## 8. 实机验证记录
+## 10. 实机验证记录
 
 设备：realme UI（Android 16），LSPosed v2.1.1，Athena 6.0.1（`60944a5f…`）。
 
@@ -346,7 +383,7 @@ Hook 侧 `XposedInterface#getRemotePreferences(group)` 读的是**框架侧存�
 
 - [x] 模块注入 system_server（作用域必须写进程名 `system`，写 `android` 不会注入）。
 - [x] 路径 A 的 Hook 命中并返回「不杀」。
-- [x] 配置通道打通（`module_configs` 表出现 `keep` / `kill` 两组数据）。
+- [x] 名单已生效（Hook 日志出现 `config loaded: keep=[...] kill=[...]`）。
 - [x] 路径 B 的 Hook 命中（`athena hooks installed: 1`、`athena keep:`、`athena swipe keep:`）。
 - [x] 名单内 App 划卡后进程存活（`com.omarea.vtools`：卡片消失、进程保留）。
 - [x] 必杀对带常驻服务的 App 生效（`com.tencent.mm`）：
@@ -358,7 +395,7 @@ Hook 侧 `XposedInterface#getRemotePreferences(group)` 读的是**框架侧存�
 
   即旧进程在划卡瞬间结束、3 秒后由系统重新拉起。
 
-### 2026-09-22：必杀对拼多多（`com.xunmeng.pinduoduo`）
+### 10.1 2026-09-22：必杀对拼多多（`com.xunmeng.pinduoduo`）
 
 ```
 20:53:51.779  config loaded: keep=[com.termux, github.tornaco.android.thanos.pro, com.omarea.vtools] kill=[com.xunmeng.pinduoduo]
@@ -380,10 +417,10 @@ Hook 侧 `XposedInterface#getRemotePreferences(group)` 读的是**框架侧存�
 > `next-top-activity` = 用户主动打开，`broadcast` / `service` / `content provider` = 自启。
 > 只看进程是否存在会被「用户手动打开」污染。
 
-> 该轮之前有一次「划卡杀不掉」的观察，根因是**配置通道失效**（§6 第三个坑），
-> 不是 force-stop 不够强：用户 20:43:58 设的必杀名单，直到 20:52:28（重启后）才写入框架侧。
+> 该轮之前有一次「划卡杀不掉」的观察，根因是**当时配置未生效**（旧配置通道失效，
+> 见 docs/decisions.md），不是 force-stop 不够强。
 
-### 2026-09-22：应用分身（多开）
+### 10.2 2026-09-22：应用分身（多开）
 
 ColorOS 分身 = 独立 user（类型 `MultiApp`，`parentId=0`），**包名与本体相同**，仅 uid 不同：
 
@@ -411,11 +448,15 @@ pm list packages -U --user 999  → package:com.xunmeng.pinduoduo uid:99910367
 ```
 
 - [x] **分身受包名名单控制**：998 / 999 / 0 的进程均被 `o-stop(0)` 结束。
-- [x] **Hook 4 的 userId 传递正确**：`am_kill` 首字段分别标记 998 / 999 / 0，未互相误伤。
-- [x] 998 与 999 同时有任务时，划掉 998 的卡只杀 998 —— 印证 §7.6 的 `J0` 按 userId 隔离。
-- [ ] 现状**无法区分本体与分身**：名单是包级 StringSet，一条记录同时命中三者（待改造）。
+- [x] **强杀路径的 userId 传递正确**：`am_kill` 首字段分别标记 998 / 999 / 0，未互相误伤。
+- [x] 998 与 999 同时有任务时，划掉 998 的卡只杀 998 —— 印证 §7.3 的 `J0` 按 userId 隔离。
+- [ ] 当时**无法区分本体与分身**：名单是包级 `StringSet`，一条记录同时命中三者（待改造）。
 
-> 注：模块日志只打 `pkg`，看不出 userId。改造后日志须带 userId，否则分身场景无法验证。
+> 注：当时的模块日志只打 `pkg`，看不出 userId；带 userId 的日志与按 `<pkg>#<userId>`
+> 分治的现状见 docs/testing.md。
 
-未覆盖（见 §7）：系统应用分支 `I0()`、最近任务锁定的卡片、
+**测试样本**：拼多多 `com.xunmeng.pinduoduo`，user 998 / 999 各一个分身
+（uid `99810367` / `99910367`），本体 uid `10367`。
+
+未覆盖（见 §9）：系统应用分支 `I0()`、最近任务锁定的卡片、
 **同一 userId 下**同包多任务（`J0` 跳过）。

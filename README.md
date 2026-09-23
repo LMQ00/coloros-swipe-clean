@@ -67,7 +67,7 @@ force-stop（`utils.p.b`），与系统清理走同一条路。
 （`OplusAppStartupManager#shouldPreventStartProvider`），否则 ColorOS 会拦掉配置拉取。
 只对本模块包名生效，不改变其它应用的启动策略。
 
-细节、返回值语义与出处见 [`docs/athena-reverse.md`](docs/athena-reverse.md)，
+细节、返回值语义与出处见 [`docs/references.md`](docs/references.md)，
 模块结构与配置通道见 [`docs/architecture.md`](docs/architecture.md)。
 
 ## 安装
