@@ -18,6 +18,19 @@ su -c 'pm install -r /data/local/tmp/swipeclean.apk'
 CI 解码到 `KEYSTORE_PATH` 注入；签名固定 → 新构建可直接覆盖安装。
 本地/无密钥时自动退回 debug 签名。
 
+### 发布 Release
+
+版本号在 `app/build.gradle.kts`（`versionCode` 递增、`versionName` 为 `X.Y`），
+发版时打**轻量 tag** 并建 Release，附件名与既有版本保持一致：
+
+```bash
+git tag v1.2 <发版提交> && git push origin v1.2
+cp ~/tmp/apk/swipe-clean-release/app-release.apk ~/tmp/swipe-clean-v1.2.apk
+gh release create v1.2 ~/tmp/swipe-clean-v1.2.apk --title "划卡控制 v1.2" --notes-file <notes.md>
+```
+
+`gh release create` 用 `文件#标签` 只会改显示标签、**不改附件名**，附件名要按上面的方式先重命名。
+
 ## 设备侧维护
 
 设备：realme UI / ColorOS 16（Android 16），已 root（KernelSU），LSPosed `v2.1.1-it`。
