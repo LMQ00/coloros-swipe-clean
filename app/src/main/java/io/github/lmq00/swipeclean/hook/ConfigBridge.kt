@@ -23,7 +23,8 @@ import java.util.concurrent.atomic.AtomicBoolean
  * 三条读取路径：
  * 1. **开机即读缓存文件**（[restoreFromCache]）——纯文件 I/O，不依赖 AMS、不依赖 App 能否被拉起。
  *    ColorOS 在开机窗口内会拦第三方 App 启动（`isPreventBootStartData`，
- *    `OplusAppStartupManager.java:4082`），实测完整重启后首次拉取要等约 5 分钟；
+ *    `OplusAppStartupManager.java:4082`），实测完整重启后启动期拉取全部失败，
+ *    直到用户打开一次 App 才成功（不是「等固定时长就放行」）；
  *    有缓存就不会出现「重启后名单为空」的空窗。
  * 2. **App 的配置变更广播** → 立即重新拉取。
  * 3. **判定路径上的惰性刷新**（2 秒 TTL；非阻塞——过期时起后台线程拉取，本次判定仍用当前缓存）。
