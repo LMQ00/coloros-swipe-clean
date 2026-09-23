@@ -18,6 +18,7 @@ ColorOS / realme UI 的「划卡（recents swipe）杀不杀」白名单 LSPosed
 | [`docs/athena-reverse.md`](docs/athena-reverse.md) | 改 Hook 点、返回值语义、判定链之前必读 |
 | [`docs/architecture.md`](docs/architecture.md) | 改模块结构、配置通道、分身支持之前必读 |
 | [`docs/development.md`](docs/development.md) | 构建、安装、设备侧调试与验证时 |
+| [`docs/交接文档.md`](docs/交接文档.md) | 零上下文接手本仓库时先读（现状判据、改动索引、验证步骤、坑与缺口） |
 
 ## 当前状态
 
