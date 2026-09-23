@@ -113,6 +113,9 @@ internal object ConfigBridge {
 
     /** 名单 key 为 `<pkg>#<userId>`：分身是独立 user，包名与本体相同。 */
     fun modeOf(module: XposedModule, pkg: String, userId: Int): Int {
+        // 模块自身的 App 恒视为「不杀」：它是配置通道的一端，被划卡或 athena 的内存清理杀掉
+        // 只会带来无谓的冷启动（开机窗口内还可能被 ROM 拦住）。UI 里不列出它，用户无从冲突。
+        if (pkg == Config.MODULE_PACKAGE) return Config.MODE_KEEP
         if (loaded) {
             refresh(module)
         } else if (SystemClock.elapsedRealtime() - loadedAt >= TTL_MS) {
